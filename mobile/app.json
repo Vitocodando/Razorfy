@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Razorfy",
+    "slug": "razorfy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/razorfy.png",
+    "userInterfaceStyle": "light",
+    "scheme": "razorfy",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.razorfy.app"
+    },
+    "android": {
+      "package": "com.razorfy.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#f6f5ea",
+        "foregroundImage": "./assets/razorfy.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/razorfy.png"
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#f6f5ea",
+          "image": "./assets/razorfy.png",
+          "imageWidth": 280
+        }
+      ]
+    ],
+    "extra": {
+      "supportsTabletLayout": true
+    }
+  }
+}

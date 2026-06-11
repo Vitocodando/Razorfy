@@ -1,0 +1,33 @@
+@import '@fontsource/montserrat/latin-400.css';
+@import '@fontsource/montserrat/latin-500.css';
+@import '@fontsource/montserrat/latin-600.css';
+@import '@fontsource/montserrat/latin-700.css';
+@import '@fontsource/montserrat/latin-800.css';
+@import '@fontsource/montserrat/latin-700-italic.css';
+@import '@fontsource/montserrat/latin-800-italic.css';
+
+:root {
+  font-family: 'Montserrat', sans-serif;
+  color: #171717;
+  background: #f6f5ea;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --ink: #171717;
+  --muted: #686868;
+  --paper: #fffef8;
+  --line: #deddd3;
+  --gold: #e53935;
+  --gold-dark: #c62828;
+  --green: #283593;
+  --green-dark: #1a237e;
+  --cream: #f6f5ea;
+  --blue-soft: #e8eaf6;
+  --red-soft: #ffebee;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+h1, h2, h3, p { margin-top: 0; }

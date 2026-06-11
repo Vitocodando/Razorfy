@@ -1,0 +1,51 @@
+import { Router } from 'express';
+import { authenticate } from '../middleware/authenticate';
+import { requireRole } from '../middleware/requireRole';
+import { asyncHandler } from '../common/asyncHandler';
+import { CreateAppointmentSchema } from './appointment.schemas';
+import {
+  createAppointment,
+  cancelAppointment,
+  concludeAppointment,
+  listClientAppointments,
+} from './appointment.service';
+
+export const appointmentRouter = Router();
+
+appointmentRouter.post(
+  '/',
+  authenticate,
+  requireRole('CLIENT'),
+  asyncHandler(async (req, res) => {
+    const body = CreateAppointmentSchema.parse(req.body);
+    const result = await createAppointment(req.user!.id, body);
+    res.status(201).json(result);
+  }),
+);
+
+appointmentRouter.get(
+  '/mine',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const appointments = await listClientAppointments(req.user!.id);
+    res.json(appointments);
+  }),
+);
+
+appointmentRouter.post(
+  '/:id/cancel',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const updated = await cancelAppointment(req.params.id, req.user!.id);
+    res.json(updated);
+  }),
+);
+
+appointmentRouter.post(
+  '/:id/conclude',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const updated = await concludeAppointment(req.params.id, req.user!.id);
+    res.json(updated);
+  }),
+);

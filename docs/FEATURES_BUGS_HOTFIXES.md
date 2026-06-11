@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-10
+last_updated: 2026-06-11
 source_of_truth: true
 automation_ready: true
 ---
@@ -623,6 +623,114 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `database_changes`: `NONE`
 - `api_compatibility`: `COMPATIBLE`
 - `verification`: lint e build de produção aprovados.
+- `release`: `UNRELEASED`
+
+### BUG-2026-004 - Arquivo .env não era carregado pelo backend Node.js
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `MEDIUM`
+- `feature_ids`: `FEAT-043`, `FEAT-044`
+- `reported_at`: `2026-06-11`
+- `reported_by`: execução local de `npm run dev` após migração Java → Node.js.
+- `environment`: desenvolvimento local, backend Node.js 22 + tsx.
+- `symptom`: `npm run dev` abortava com `ZodError: JWT_SECRET Required` mesmo com `.env` presente.
+- `expected_behavior`: variáveis do `.env` disponíveis em `process.env` na inicialização.
+- `reproduction_steps`: criar `backend/.env` válido e executar `npm run dev`.
+- `root_cause`: `config.ts` lia apenas `process.env`; nem `tsx` nem o Node carregam `.env` automaticamente (o Spring Boot anterior usava variáveis injetadas pelo Docker Compose).
+- `resolution`: chamada a `process.loadEnvFile()` (nativo do Node 20.12+) no topo de `config.ts`, com `try/catch` para ambientes sem arquivo (Vercel, Docker).
+- `files_changed`: `backend/src/config.ts`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: `npm run dev` inicializou e validou todas as variáveis via zod.
+- `regression_test`: recomendado teste de inicialização do config com `.env` ausente e presente.
+- `release`: `UNRELEASED`
+
+### BUG-2026-005 - Violação de unicidade do Prisma retornava 500 em vez de 409
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `MEDIUM`
+- `feature_ids`: `FEAT-001`, `FEAT-035`
+- `reported_at`: `2026-06-11`
+- `reported_by`: smoke test HTTP de cadastro com telefone duplicado.
+- `environment`: desenvolvimento local, backend Node.js + Prisma 6 + Supabase PostgreSQL.
+- `symptom`: `POST /api/v1/auth/register` com telefone já cadastrado retornava `500 INTERNAL_ERROR`.
+- `expected_behavior`: HTTP `409` com código de negócio (`PHONE_ALREADY_EXISTS` ou `EMAIL_ALREADY_EXISTS`).
+- `reproduction_steps`: registrar usuário com telefone de um usuário existente (o serviço pré-validava apenas e-mail).
+- `evidence`: log `PrismaClientKnownRequestError code P2002, target: ['phone']`.
+- `root_cause`: o `errorHandler` tratava apenas o código PostgreSQL cru `23505`, mas o Prisma embrulha violações de unicidade em `PrismaClientKnownRequestError` com código `P2002`, que caía no fallback 500.
+- `resolution`: tratamento de `P2002` no `errorHandler` mapeando `meta.target` para `EMAIL_ALREADY_EXISTS`, `PHONE_ALREADY_EXISTS` ou `DATA_CONFLICT`, todos HTTP `409`.
+- `files_changed`: `backend/src/common/errorHandler.ts`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: cadastro duplicado retornou `409`; cadastro com telefone único retornou `201` com JWT.
+- `regression_test`: recomendado teste de integração de register com e-mail e telefone duplicados.
+- `release`: `UNRELEASED`
+
+### BUG-2026-006 - Colunas TIME mapeadas como String quebravam a disponibilidade
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `HIGH`
+- `feature_ids`: `FEAT-007`, `FEAT-008`
+- `reported_at`: `2026-06-11`
+- `reported_by`: smoke test HTTP de disponibilidade.
+- `environment`: desenvolvimento local, backend Node.js + Prisma 6 + Supabase PostgreSQL.
+- `symptom`: `GET /api/v1/barbers/{id}/availability` retornava `500 INTERNAL_ERROR` para qualquer barbeiro e data.
+- `expected_behavior`: lista de horários disponíveis na grade de 15 minutos.
+- `reproduction_steps`: consultar disponibilidade de qualquer barbeiro do seed.
+- `evidence`: log `P2032: Error converting field "startTime" of expected non-nullable type "String", found incompatible value of "1970-01-01 09:00:00 +00:00"`.
+- `root_cause`: as colunas `TIME` de `barber_slots` estavam declaradas como `String @db.VarChar(8)` no `schema.prisma` (contorno de validação aplicado na migração Java → Node.js); o schema passava na validação, mas o client falhava na leitura porque o driver entrega `TIME` como timestamp ancorado em 1970-01-01.
+- `resolution`: campos remapeados para `DateTime @db.Time(0)` e conversão para minutos via `getUTCHours()/getUTCMinutes()` no helper `timeToMinutes` de `availability.service.ts`, substituindo `parseTimeToMinutes` baseado em string.
+- `files_changed`: `backend/prisma/schema.prisma`, `backend/src/schedule/availability.service.ts`
+- `database_changes`: `NONE` (apenas mapeamento; o schema SQL permaneceu intacto)
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: disponibilidade retornou a grade correta (início 09:00 America/Sao_Paulo = 12:00Z) respeitando jornada do seed.
+- `regression_test`: recomendado teste de integração lendo `barber_slots` e calculando a janela de trabalho.
+- `release`: `UNRELEASED`
+
+### BUG-2026-007 - Timeout de transação do Prisma com banco remoto
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `HIGH`
+- `feature_ids`: `FEAT-010`, `FEAT-012`
+- `reported_at`: `2026-06-11`
+- `reported_by`: smoke test HTTP de criação de agendamento contra Supabase.
+- `environment`: desenvolvimento local com banco Supabase (região sa-east-1) via session pooler.
+- `symptom`: `POST /api/v1/appointments` retornava `500` com `P2028: Transaction already closed (timeout 5000 ms, 11365 ms decorridos)`.
+- `expected_behavior`: agendamento criado dentro da transação interativa, independentemente da latência do banco.
+- `reproduction_steps`: criar agendamento com o banco hospedado remotamente (latência de rede por query).
+- `root_cause`: a transação interativa do fluxo de agendamento executa várias queries sequenciais (locks, validações, criação, cashback, auditoria); com banco remoto, as idas e voltas excedem o timeout padrão de 5 s do Prisma.
+- `resolution`: `transactionOptions` globais no `PrismaClient` (`maxWait: 15s`, `timeout: 30s`) e `connect_timeout=30&pool_timeout=30` na `DATABASE_URL`.
+- `files_changed`: `backend/src/prisma.ts`, `backend/.env.example`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: criação de agendamento concluída com sucesso contra o Supabase.
+- `regression_test`: recomendado monitorar duração das transações; avaliar redução de round-trips no fluxo de criação.
+- `release`: `UNRELEASED`
+
+### BUG-2026-008 - Resposta de agendamento quebrava ao serializar BigInt
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `MEDIUM`
+- `feature_ids`: `FEAT-010`, `FEAT-035`
+- `reported_at`: `2026-06-11`
+- `reported_by`: smoke test HTTP de criação de agendamento.
+- `environment`: desenvolvimento local, backend Node.js + Prisma 6.
+- `symptom`: agendamento era persistido, mas a resposta HTTP retornava `500` (`TypeError: Do not know how to serialize a BigInt`).
+- `expected_behavior`: HTTP `201` com o agendamento criado e payload de pagamento.
+- `reproduction_steps`: criar agendamento e observar a serialização da resposta.
+- `evidence`: stack trace do `JSON.stringify` em `express/lib/response.js` via `res.json`.
+- `root_cause`: a coluna `version BIGINT` (lock otimista) chega como `BigInt` do Prisma, e `JSON.stringify` nativo não serializa `BigInt`.
+- `resolution`: `BigInt.prototype.toJSON` global definido em `app.ts` convertendo para `Number` (seguro: os valores são contadores de versão).
+- `files_changed`: `backend/src/app.ts`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: criação retornou `201`; webhook mock confirmou (`CONFIRMED`) e `GET /appointments/mine` listou o agendamento.
+- `regression_test`: recomendado teste de contrato serializando entidades com coluna `version`.
 - `release`: `UNRELEASED`
 
 ## 6. Registro de hotfixes

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api" }
+  ],
+  "crons": [
+    { "path": "/api/internal/jobs/expire-holds", "schedule": "* * * * *" },
+    { "path": "/api/internal/jobs/process-outbox", "schedule": "* * * * *" }
+  ]
+}

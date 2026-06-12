@@ -1,10 +1,17 @@
 import express from 'express';
 import cors from 'cors';
+import { Prisma } from '@prisma/client';
 
 // Colunas BIGINT (ex.: version) chegam como BigInt e o JSON.stringify nativo não os serializa.
 // Os valores aqui cabem com folga em Number (contadores de versão otimista).
 (BigInt.prototype as unknown as { toJSON: () => number }).toJSON = function (this: bigint) {
   return Number(this);
+};
+
+// Prisma.Decimal serializa como string por padrão; o contrato da API (herdado do
+// Jackson/BigDecimal do backend Java) usa números JSON para preços e saldos.
+(Prisma.Decimal.prototype as unknown as { toJSON: () => number }).toJSON = function (this: Prisma.Decimal) {
+  return this.toNumber();
 };
 import { config } from './config';
 import { errorHandler } from './common/errorHandler';

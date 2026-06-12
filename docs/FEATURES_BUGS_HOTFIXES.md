@@ -457,29 +457,33 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 
 ### FEAT-037 - Interface de agendamento
 
-- `status`: `IMPLEMENTED`
+- `status`: `DEPRECATED`
 - `area`: `FRONTEND`
 - `description`: Serviços, duração, profissional, data, horários, pagamento, cashback e resumo.
 - `acceptance`: botão de confirmação permanece desabilitado sem serviços e horário.
+- `deprecated_at`: `2026-06-11`, substituída pelo fluxo MVP de `FEAT-049`.
 
 ### FEAT-038 - Interface de pagamento PIX
 
-- `status`: `IMPLEMENTED`
+- `status`: `DEPRECATED`
 - `area`: `FRONTEND`
 - `description`: Exibe código PIX simulado e ação de aprovação para desenvolvimento.
 - `warning`: deve ser substituída pelo fluxo do gateway real antes de produção financeira.
+- `deprecated_at`: `2026-06-11`, removida do frontend no MVP (`FEAT-049`); a API `POST /api/v1/payments/webhooks/mock` permanece ativa.
 
 ### FEAT-039 - Interface de histórico
 
-- `status`: `IMPLEMENTED`
+- `status`: `DEPRECATED`
 - `area`: `FRONTEND`
 - `description`: Exibe status, data, horário, barbeiro, serviços, valor e cancelamento permitido.
+- `deprecated_at`: `2026-06-11`, removida do frontend no MVP (`FEAT-049`); a API `GET /api/v1/appointments/mine` permanece ativa.
 
 ### FEAT-040 - Interface da carteira
 
-- `status`: `IMPLEMENTED`
+- `status`: `DEPRECATED`
 - `area`: `FRONTEND`
 - `description`: Exibe saldo disponível e extrato de cashback.
+- `deprecated_at`: `2026-06-11`, removida do frontend no MVP (`FEAT-049`); a API `GET /api/v1/wallet` permanece ativa.
 
 ### FEAT-041 - Responsividade
 
@@ -508,6 +512,13 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `description`: Cria administrador e define senhas de barbeiros somente quando habilitado.
 - `flag`: `DEV_BOOTSTRAP_ENABLED`
 - `security`: deve permanecer desabilitado em produção.
+- `dev_accounts`: contas de teste para desenvolvimento local, validadas por login HTTP em `2026-06-11`:
+  - `ADMIN`: `admin@razorfy.local` (e-mail definido por `DEV_ADMIN_EMAIL`; senha definida por `DEV_ADMIN_PASSWORD`).
+  - `BARBER`: `rafael@razorfy.local` (Rafael Martins) e `bruno@razorfy.local` (Bruno Costa), criados pelo seed `0002_seed_dev`; senha definida por `DEV_STAFF_PASSWORD`.
+  - `CLIENT`: `usuario.teste@razorfy.dev` e `teste.cliente@razorfy.dev`, criados via `POST /api/v1/auth/register` (o segundo possui um agendamento `CONFIRMED` no histórico para testes de fluxo).
+  - As senhas não são registradas aqui (regra 8 da seção 1.3); estão nas variáveis do `backend/.env` local.
+- `usage`: contas destinadas a smoke tests do fluxo completo — barbeiro conclui atendimento (`/conclude`, gera cashback), admin acessa `GET /api/v1/reports/summary`.
+- `production_checklist`: antes de qualquer deploy em produção é obrigatório (1) alterar todas as senhas das contas de desenvolvimento (`DEV_ADMIN_PASSWORD`, `DEV_STAFF_PASSWORD` e contas de cliente de teste) e (2) definir `DEV_BOOTSTRAP_ENABLED=false` após o primeiro deploy que criar o admin.
 
 ### FEAT-045 - Acesso operacional do perfil DEV
 
@@ -556,6 +567,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `acceptance`: o cliente consegue autenticar, consultar dados, montar e confirmar um agendamento, acompanhar a agenda, cancelar dentro da janela permitida e consultar o cashback.
 - `tests`: TypeScript sem erros, Expo Doctor `21/21`, bundle Android exportado e autenticação inspecionada visualmente em viewport mobile.
 - `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-049 - MVP de agendamento simplificado
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: Fluxo enxuto em duas telas — home com catálogo agrupado por categoria (Cabelo, Barba, Sobrancelha, Especiais) e CTA de agendamento em destaque; calendário com pergunta de preferência de profissional ("sem preferência" agrega horários de todos os barbeiros), escolha de dia e horário em cascata.
+- `business_rules`: sem preferência, o horário escolhido é atribuído ao primeiro barbeiro livre naquele instante; pagamento fixo `PRESENTIAL` (confirma imediatamente); categorização do catálogo derivada do nome do serviço.
+- `api`: reutiliza `GET /services`, `GET /barbers`, `GET /barbers/{id}/availability` e `POST /appointments`; nenhuma alteração de backend.
+- `frontend`: `frontend/src/App.tsx` reescrito; telas removidas: carteira, histórico, pagamento PIX e controles de cashback (`FEAT-037` a `FEAT-040` marcadas `DEPRECATED`).
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-002`, `FEAT-004`, `FEAT-006`, `FEAT-008`, `FEAT-010`, `FEAT-013`
+- `acceptance`: cliente autenticado escolhe serviços na home, abre o calendário, responde sobre preferência de profissional, escolhe dia e horário e confirma; agendamento criado como `CONFIRMED`.
+- `tests`: build de produção aprovado (`tsc -b && vite build`); fluxo validado via API simulando a sequência da UI (disponibilidade agregada dos 2 barbeiros + agendamento presencial confirmado).
+- `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas
@@ -731,6 +759,28 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `api_compatibility`: `COMPATIBLE`
 - `verification`: criação retornou `201`; webhook mock confirmou (`CONFIRMED`) e `GET /appointments/mine` listou o agendamento.
 - `regression_test`: recomendado teste de contrato serializando entidades com coluna `version`.
+- `release`: `UNRELEASED`
+
+### BUG-2026-009 - Contrato da API divergente após migração causava tela em branco no login
+
+- `status`: `VERIFIED`
+- `priority`: `P0`
+- `risk`: `HIGH`
+- `feature_ids`: `FEAT-002`, `FEAT-010`, `FEAT-022`, `FEAT-036`
+- `reported_at`: `2026-06-11`
+- `reported_by`: usuário, ao fazer login no frontend local.
+- `environment`: desenvolvimento local, frontend React + backend Node.js migrado.
+- `symptom`: após o login a aplicação exibia tela em branco (crash do React sem fallback).
+- `expected_behavior`: redirecionar para a tela de agendamento autenticada.
+- `reproduction_steps`: fazer login no frontend com o backend Node.js; a UI quebra ao acessar `session.user.name`.
+- `evidence`: frontend espera `Session = { accessToken, user: {...} }` (`frontend/src/App.tsx`), backend retornava `{ id, name, email, role, token }`.
+- `root_cause`: a migração Java → Node.js não reproduziu fielmente os DTOs do contrato da API em três pontos: (1) resposta de auth sem envelope `accessToken`/`user`; (2) agendamentos retornando a entidade crua do Prisma em vez do DTO (`appointmentId`, `amountToPay`, `barberName`, `services[].name`, `paymentPayload.copyPasteCode`); (3) `Prisma.Decimal` serializado como string em vez de número JSON (Jackson serializava `BigDecimal` como número).
+- `resolution`: (1) `sessionFor()` em `auth.service.ts` retornando `{ accessToken, user }`; (2) novo `appointment.dto.ts` com `toAppointmentDto()` aplicado em todas as respostas do `appointment.router.ts`; (3) `Prisma.Decimal.prototype.toJSON` global em `app.ts` convertendo para número.
+- `files_changed`: `backend/src/auth/auth.service.ts`, `backend/src/appointment/appointment.dto.ts`, `backend/src/appointment/appointment.router.ts`, `backend/src/app.ts`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE` (restaura o contrato original consumido por frontend e mobile)
+- `verification`: login retornou `{ accessToken, user }` com todos os campos; `GET /appointments/mine` retornou DTO com `appointmentId`, `amountToPay: 35` (número), `barberName` e `services[].name`; preços do catálogo como números JSON.
+- `regression_test`: recomendado teste de contrato (schema JSON) das respostas de auth, appointments, services e wallet — candidato prioritário para o futuro script de TDD.
 - `release`: `UNRELEASED`
 
 ## 6. Registro de hotfixes

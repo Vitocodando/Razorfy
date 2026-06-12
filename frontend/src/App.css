@@ -184,3 +184,19 @@ main { min-width: 0; background: var(--cream); }
   .result-card { grid-template-columns: 1fr; gap: 15px; text-align: center; }
   .result-card > div { border: 0; padding: 0; }
 }
+
+/* CTA fixo de agendamento (MVP) */
+.schedule-cta {
+  position: sticky;
+  bottom: 16px;
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+  z-index: 10;
+}
+.schedule-cta .primary-button {
+  width: min(560px, 100%);
+  padding: 18px 32px;
+  font-size: 1.05rem;
+  box-shadow: 0 12px 32px rgba(229, 57, 53, 0.35);
+}

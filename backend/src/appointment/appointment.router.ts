@@ -3,6 +3,7 @@ import { authenticate } from '../middleware/authenticate';
 import { requireRole } from '../middleware/requireRole';
 import { asyncHandler } from '../common/asyncHandler';
 import { CreateAppointmentSchema } from './appointment.schemas';
+import { toAppointmentDto } from './appointment.dto';
 import {
   createAppointment,
   cancelAppointment,
@@ -19,7 +20,7 @@ appointmentRouter.post(
   asyncHandler(async (req, res) => {
     const body = CreateAppointmentSchema.parse(req.body);
     const result = await createAppointment(req.user!.id, body);
-    res.status(201).json(result);
+    res.status(201).json(toAppointmentDto(result.appointment, result.paymentPayload));
   }),
 );
 
@@ -28,7 +29,7 @@ appointmentRouter.get(
   authenticate,
   asyncHandler(async (req, res) => {
     const appointments = await listClientAppointments(req.user!.id);
-    res.json(appointments);
+    res.json(appointments.map(a => toAppointmentDto(a)));
   }),
 );
 
@@ -37,7 +38,7 @@ appointmentRouter.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const updated = await cancelAppointment(req.params.id, req.user!.id);
-    res.json(updated);
+    res.json(toAppointmentDto(updated));
   }),
 );
 
@@ -46,6 +47,6 @@ appointmentRouter.post(
   authenticate,
   asyncHandler(async (req, res) => {
     const updated = await concludeAppointment(req.params.id, req.user!.id);
-    res.json(updated);
+    res.json(toAppointmentDto(updated));
   }),
 );

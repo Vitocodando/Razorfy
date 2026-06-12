@@ -31,7 +31,7 @@ export async function register(data: {
     },
   });
 
-  return { id: user.id, name: user.name, email: user.email, role: user.role, token: tokenFor(user) };
+  return sessionFor(user);
 }
 
 export async function login(email: string, password: string) {
@@ -43,7 +43,15 @@ export async function login(email: string, password: string) {
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) throw new BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
 
-  return { id: user.id, name: user.name, email: user.email, role: user.role, token: tokenFor(user) };
+  return sessionFor(user);
+}
+
+// Contrato consumido por frontend e mobile: { accessToken, user: { id, name, email, phone, role } }
+function sessionFor(user: { id: string; name: string; email: string; phone: string; role: string }) {
+  return {
+    accessToken: tokenFor(user),
+    user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role },
+  };
 }
 
 function tokenFor(user: { id: string; name: string; role: string }) {

@@ -6,28 +6,78 @@
 @import '@fontsource/montserrat/latin-700-italic.css';
 @import '@fontsource/montserrat/latin-800-italic.css';
 
-:root {
-  font-family: 'Montserrat', sans-serif;
-  color: #171717;
-  background: #f6f5ea;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  --ink: #171717;
-  --muted: #686868;
-  --paper: #fffef8;
-  --line: #deddd3;
-  --gold: #e53935;
-  --gold-dark: #c62828;
-  --green: #283593;
-  --green-dark: #1a237e;
-  --cream: #f6f5ea;
-  --blue-soft: #e8eaf6;
-  --red-soft: #ffebee;
+@import 'tailwindcss';
+
+/* Tokens do design system Razorfy (gerados pela especificação de UI / IA-B) */
+@theme {
+  --font-sans: 'Montserrat', sans-serif;
+
+  --color-primary: #b7131a;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #db322f;
+  --color-on-primary-fixed-variant: #93000d;
+  --color-primary-fixed: #ffdad6;
+  --color-primary-fixed-dim: #ffb4ac;
+
+  --color-secondary: #4955b3;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #8f9cff;
+  --color-on-secondary-container: #202e8c;
+
+  --color-tertiary: #5d5c5b;
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+
+  --color-background: #fbfaef;
+  --color-on-background: #1b1c16;
+  --color-surface: #fbfaef;
+  --color-surface-dim: #dbdad0;
+  --color-on-surface: #1b1c16;
+  --color-on-surface-variant: #5b403d;
+  --color-surface-variant: #e4e3d8;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f5f4e9;
+  --color-surface-container: #efeee3;
+  --color-surface-container-high: #e9e9de;
+  --color-surface-container-highest: #e4e3d8;
+  --color-outline: #906f6c;
+  --color-outline-variant: #e4beb9;
+
+  --radius-DEFAULT: 0.125rem;
+  --radius-lg: 0.25rem;
+  --radius-xl: 0.5rem;
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input, select { font: inherit; }
-button { cursor: pointer; }
-button:disabled { cursor: not-allowed; opacity: .55; }
-h1, h2, h3, p { margin-top: 0; }
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--color-background);
+  color: var(--color-on-background);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+
+/* Ícones Material Symbols (fonte carregada no index.html) */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+}
+.material-symbols-outlined.filled {
+  font-variation-settings: 'FILL' 1;
+}
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

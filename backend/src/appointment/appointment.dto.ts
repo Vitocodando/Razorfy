@@ -11,6 +11,7 @@ interface AppointmentWithRelations {
   startTimestamp: Date;
   endTimestamp: Date;
   barber: { name: string };
+  client?: { name: string };
   services: { serviceName: string; durationMinutes: number; price: Prisma.Decimal }[];
 }
 
@@ -24,6 +25,7 @@ export function toAppointmentDto(appt: AppointmentWithRelations, paymentPayload:
     startTimestamp: appt.startTimestamp,
     endTimestamp: appt.endTimestamp,
     barberName: appt.barber.name,
+    clientName: appt.client?.name,
     services: appt.services.map(s => ({
       name: s.serviceName,
       durationMinutes: s.durationMinutes,

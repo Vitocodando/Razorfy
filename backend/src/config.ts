@@ -23,7 +23,16 @@ const Schema = z.object({
   DEV_ADMIN_PASSWORD: z.string().optional(),
   DEV_STAFF_PASSWORD: z.string().optional(),
   CRON_SECRET: z.string().optional(),
+  // Login social Google (OAuth 2.0). Opcionais: ausentes => endpoint /auth/google responde 503.
+  // O client_secret é confidencial e nunca deve ser versionado.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.string().optional(),
   PORT: z.coerce.number().int().default(8080),
 });
 
 export const config = Schema.parse(process.env);
+
+export const googleOAuthEnabled = Boolean(
+  config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET && config.GOOGLE_REDIRECT_URI,
+);

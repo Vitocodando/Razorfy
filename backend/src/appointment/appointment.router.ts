@@ -9,6 +9,7 @@ import {
   cancelAppointment,
   concludeAppointment,
   listClientAppointments,
+  listBarberAppointments,
 } from './appointment.service';
 
 export const appointmentRouter = Router();
@@ -28,7 +29,10 @@ appointmentRouter.get(
   '/mine',
   authenticate,
   asyncHandler(async (req, res) => {
-    const appointments = await listClientAppointments(req.user!.id);
+    const user = req.user!;
+    const appointments = user.role === 'BARBER'
+      ? await listBarberAppointments(user.id)
+      : await listClientAppointments(user.id);
     res.json(appointments.map(a => toAppointmentDto(a)));
   }),
 );

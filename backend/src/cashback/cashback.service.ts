@@ -117,12 +117,14 @@ async function updateWallet(
   newBalance: Prisma.Decimal,
   newReserved: Prisma.Decimal,
 ) {
-  const result = await (tx as PrismaClient).$executeRaw`
-    UPDATE cashback_wallets
-    SET balance = ${newBalance}, reserved_balance = ${newReserved}, version = version + 1
-    WHERE id = ${wallet.id}::uuid AND version = ${wallet.version}
-  `;
-  if (result === 0) {
+  // updateMany com guarda de versão preserva o lock otimista sem passar Decimal por
+  // $executeRaw — o engine do Prisma 6.x não serializa Decimal em raw dentro de
+  // transação interativa ("Could not convert from JSON decimal value to PrismaValue").
+  const result = await tx.cashbackWallet.updateMany({
+    where: { id: wallet.id, version: wallet.version },
+    data: { balance: newBalance, reservedBalance: newReserved, version: { increment: 1 } },
+  });
+  if (result.count === 0) {
     throw new BusinessError('WALLET_CONFLICT', 'Modificação concorrente na carteira. Tente novamente.', 409);
   }
   wallet.version = wallet.version + BigInt(1);

@@ -309,6 +309,18 @@ export async function listClientAppointments(clientId: string) {
   });
 }
 
+export async function listBarberAppointments(barberId: string) {
+  return prisma.appointment.findMany({
+    where: { barberId },
+    include: {
+      services: true,
+      client: { select: { id: true, name: true, phone: true } },
+      barber: { select: { id: true, name: true } },
+    },
+    orderBy: { startTimestamp: 'desc' },
+  });
+}
+
 async function expireHoldInTx(tx: TxClient, appt: Awaited<ReturnType<typeof lockAppointment>>) {
   const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
   await cashbackSvc.release(tx, wallet, appt.id, appt.cashbackUsed);

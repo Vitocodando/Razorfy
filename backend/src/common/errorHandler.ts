@@ -10,6 +10,7 @@ const HTTP_STATUS_TEXT: Record<number, string> = {
   409: 'Conflict',
   422: 'Unprocessable Entity',
   500: 'Internal Server Error',
+  503: 'Service Unavailable',
 };
 
 function errorBody(status: number, code: string, message: string, path: string) {

@@ -3,7 +3,9 @@ import type { FormEvent, InputHTMLAttributes, ReactNode } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 
-type User = { id: string; name: string; email: string; phone: string; role: string }
+// ---------- Tipos ----------
+
+type User = { id: string; name: string; email: string; phone: string | null; role: string }
 type Session = { accessToken: string; user: User }
 type ServiceItem = { id: string; name: string; durationMinutes: number; price: number }
 type Barber = { id: string; name: string }
@@ -13,15 +15,51 @@ type Appointment = {
   startTimestamp: string
   endTimestamp: string
   barberName: string
+  clientName?: string
   amountToPay: number
+  totalPrice: number
+  cashbackUsed: number
   services: { name: string; durationMinutes: number; price: number }[]
 }
+type Transaction = {
+  id: string
+  type: string
+  amount: number
+  description: string
+  createdAt: string
+  balanceAfter: number
+}
+type Wallet = {
+  balance: number
+  reservedBalance: number
+  availableBalance: number
+  transactions: Transaction[]
+}
+type BarberSlotData = {
+  dayOfWeek: number
+  startTime: string
+  endTime: string
+  lunchStart: string | null
+  lunchEnd: string | null
+}
 type ApiError = { message?: string }
+
+// ---------- Constantes e utilitários ----------
 
 const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
 
 const CATEGORIES = ['Cabelo', 'Barba', 'Sobrancelha', 'Especiais'] as const
 type Category = (typeof CATEGORIES)[number]
+
+const WEEKDAYS = [
+  { day: 1, label: 'Segunda-feira' },
+  { day: 2, label: 'Terça-feira' },
+  { day: 3, label: 'Quarta-feira' },
+  { day: 4, label: 'Quinta-feira' },
+  { day: 5, label: 'Sexta-feira' },
+  { day: 6, label: 'Sábado' },
+  { day: 7, label: 'Domingo' },
+]
 
 function categoryOf(service: ServiceItem): Category {
   const name = service.name.toLowerCase()
@@ -31,6 +69,29 @@ function categoryOf(service: ServiceItem): Category {
   return 'Cabelo'
 }
 
+const CATEGORY_META: Record<Category, { icon: string; description: string }> = {
+  Cabelo: { icon: 'content_cut', description: 'Cortes e acabamentos' },
+  Barba: { icon: 'face', description: 'Barba e bigode' },
+  Sobrancelha: { icon: 'visibility', description: 'Design de sobrancelha' },
+  Especiais: { icon: 'auto_awesome', description: 'Combos e premium' },
+}
+
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  CONFIRMED: { label: 'Confirmado', color: 'bg-green-100 text-green-800' },
+  PENDING_PAYMENT: { label: 'Aguardando pagamento', color: 'bg-yellow-100 text-yellow-800' },
+  CANCELLED: { label: 'Cancelado', color: 'bg-red-100 text-red-800' },
+  EXPIRED_PAYMENT: { label: 'Pagamento expirado', color: 'bg-red-100 text-red-800' },
+  CANCELLED_OVERBOOKING: { label: 'Cancelado (overbooking)', color: 'bg-red-100 text-red-800' },
+  CONCLUDED: { label: 'Concluído', color: 'bg-blue-100 text-blue-800' },
+}
+
+const TRANSACTION_META: Record<string, { label: string; icon: string; sign: string; color: string }> = {
+  CREDIT: { label: 'Crédito', icon: 'add_circle', sign: '+', color: 'text-green-700' },
+  DEBIT: { label: 'Débito', icon: 'remove_circle', sign: '-', color: 'text-red-700' },
+  RESERVE: { label: 'Reservado', icon: 'lock', sign: '-', color: 'text-yellow-700' },
+  RELEASE: { label: 'Liberado', icon: 'lock_open', sign: '+', color: 'text-yellow-700' },
+}
+
 function dateInputValue(date: Date) {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -38,10 +99,15 @@ function dateInputValue(date: Date) {
   return `${year}-${month}-${day}`
 }
 
+
 function tomorrow() {
   const date = new Date()
   date.setDate(date.getDate() + 1)
   return dateInputValue(date)
+}
+
+function canCancelFrontend(startTimestamp: string): boolean {
+  return new Date(startTimestamp).getTime() - Date.now() >= 2 * 60 * 60 * 1000
 }
 
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
@@ -54,10 +120,111 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
     },
   })
   if (!response.ok) {
+    // Token expirado/inválido numa chamada autenticada: encerra a sessão e volta ao login.
+    if (response.status === 401 && token) {
+      localStorage.removeItem('razorfy.session')
+      window.dispatchEvent(new Event('razorfy:unauthorized'))
+    }
     const body = (await response.json().catch(() => ({}))) as ApiError
     throw new Error(body.message || 'Não foi possível concluir a solicitação.')
   }
   return response.json() as Promise<T>
+}
+
+// ---------- Navegação do app ----------
+
+const CLIENT_NAV_ITEMS = [
+  { key: 'home' as const, label: 'Início', icon: 'home' },
+  { key: 'appointments' as const, label: 'Meus Horários', icon: 'event' },
+  { key: 'wallet' as const, label: 'Carteira', icon: 'account_balance_wallet' },
+]
+
+const BARBER_NAV_ITEMS = [
+  { key: 'agenda' as const, label: 'Agenda', icon: 'calendar_today' },
+  { key: 'schedule' as const, label: 'Expediente', icon: 'tune' },
+]
+
+type NavKey = 'home' | 'appointments' | 'wallet' | 'agenda' | 'schedule'
+
+type NavItem = { key: NavKey; label: string; icon: string }
+
+function AppShell({
+  active,
+  navItems,
+  onNavigate,
+  onLogout,
+  children,
+}: {
+  active: NavKey
+  navItems: NavItem[]
+  onNavigate: (key: NavKey) => void
+  onLogout: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="bg-background text-on-background min-h-screen">
+      {/* Menu lateral (desktop) */}
+      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-64 bg-surface-container-lowest border-r border-on-surface/10 flex-col z-40">
+        <div className="h-20 flex items-center gap-2 px-6 border-b border-on-surface/10">
+          <img src="/razorfy.png" alt="Razorfy" className="h-10 object-contain" />
+          <span className="text-[20px] font-bold italic uppercase tracking-tighter text-on-surface">Razorfy</span>
+        </div>
+        <nav className="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto" aria-label="Menu principal">
+          {navItems.map((item) => {
+            const isActive = active === item.key
+            return (
+              <button
+                key={item.key}
+                onClick={() => onNavigate(item.key)}
+                className={`flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-colors ${
+                  isActive ? 'bg-primary-fixed text-on-primary-fixed-variant' : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+                }`}
+              >
+                <Icon name={item.icon} filled={isActive} className="text-[22px]" />
+                <span className="text-[14px] font-semibold">{item.label}</span>
+              </button>
+            )
+          })}
+        </nav>
+        <div className="p-3 border-t border-on-surface/10">
+          <button onClick={onLogout} className="w-full flex items-center gap-3 px-3 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-primary transition-colors">
+            <Icon name="logout" />
+            <span className="text-[14px] font-semibold">Sair</span>
+          </button>
+        </div>
+      </aside>
+
+      <div className="lg:pl-64 flex flex-col min-h-screen">{children}</div>
+
+      {/* Menu inferior (mobile) */}
+      <nav
+        className="lg:hidden fixed bottom-0 left-0 right-0 bg-surface-container-lowest border-t border-on-surface/10 z-50 grid grid-flow-col auto-cols-fr pb-[env(safe-area-inset-bottom)] shadow-[0_-2px_12px_rgba(0,0,0,0.06)]"
+        aria-label="Menu principal"
+      >
+        {navItems.map((item) => {
+          const isActive = active === item.key
+          return (
+            <button
+              key={item.key}
+              onClick={() => onNavigate(item.key)}
+              aria-current={isActive ? 'page' : undefined}
+              className="relative flex flex-col items-center justify-center gap-1 h-16 group"
+            >
+              {isActive && <span className="absolute top-0 h-[3px] w-9 rounded-b-full bg-primary" />}
+              <span
+                className={`flex items-center justify-center h-8 w-14 rounded-full transition-colors ${
+                  isActive ? 'bg-primary-fixed' : 'group-hover:bg-surface-container'
+                }`}
+              >
+                <Icon name={item.icon} filled={isActive} className={`text-[22px] ${isActive ? 'text-primary' : 'text-on-surface-variant'}`} />
+              </span>
+              <span className={`text-[11px] font-semibold ${isActive ? 'text-primary' : 'text-on-surface-variant'}`}>{item.label}</span>
+            </button>
+          )
+        })}
+      </nav>
+    </div>
+  )
 }
 
 // ---------- Componentes do design system ----------
@@ -75,6 +242,16 @@ function ErrorBanner({ message }: { message: string }) {
   return (
     <div className="bg-error-container text-on-error-container p-2 rounded-lg border border-error/20 flex items-start gap-2">
       <Icon name="error" filled className="shrink-0 text-[20px]" />
+      <p className="text-[12px] font-medium pt-[2px]">{message}</p>
+    </div>
+  )
+}
+
+function SuccessBanner({ message }: { message: string }) {
+  if (!message) return null
+  return (
+    <div className="bg-green-50 text-green-800 p-2 rounded-lg border border-green-200 flex items-start gap-2">
+      <Icon name="check_circle" filled className="shrink-0 text-[20px]" />
       <p className="text-[12px] font-medium pt-[2px]">{message}</p>
     </div>
   )
@@ -119,7 +296,7 @@ function PrimaryButton({ children, disabled, onClick, type = 'button', className
   )
 }
 
-function TopBar({ title, onBack, onLogout }: { title?: string; onBack?: () => void; onLogout?: () => void }) {
+function TopBar({ title, onBack, onLogout, right }: { title?: string; onBack?: () => void; onLogout?: () => void; right?: ReactNode }) {
   return (
     <header className="w-full bg-surface border-b border-on-surface/10 sticky top-0 z-40">
       <div className="max-w-[1200px] mx-auto flex justify-between items-center px-4 md:px-8 h-16">
@@ -130,16 +307,38 @@ function TopBar({ title, onBack, onLogout }: { title?: string; onBack?: () => vo
         ) : (
           <img src="/razorfy.png" alt="Razorfy" className="h-10 object-contain" />
         )}
-        <div className="text-[24px] font-bold italic uppercase tracking-tighter text-on-surface">{title ?? 'Razorfy'}</div>
+        <div className="text-[20px] font-bold uppercase tracking-tight text-on-surface">{title ?? 'Razorfy'}</div>
         {onLogout ? (
           <button aria-label="Sair" onClick={onLogout} className="flex items-center justify-center p-2 -mr-2 text-primary hover:bg-surface-container-high rounded-full transition-colors">
             <Icon name="logout" />
           </button>
+        ) : right ? (
+          <div className="flex items-center justify-end -mr-1">{right}</div>
         ) : (
           <div className="w-10" />
         )}
       </div>
     </header>
+  )
+}
+
+function Avatar({ name, size = 40 }: { name: string; size?: number }) {
+  return (
+    <span
+      className="rounded-full bg-secondary-fixed text-on-secondary-container flex items-center justify-center font-bold shrink-0"
+      style={{ width: size, height: size, fontSize: size * 0.36 }}
+    >
+      {initials(name)}
+    </span>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const meta = STATUS_META[status] ?? { label: status, color: 'bg-surface-container text-on-surface-variant' }
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${meta.color}`}>
+      {meta.label}
+    </span>
   )
 }
 
@@ -153,22 +352,78 @@ function App() {
     return parsed?.user ? parsed : null
   })
   const [screen, setScreen] = useState<'home' | 'calendar'>('home')
+  const [nav, setNav] = useState<NavKey>(() => {
+    const saved = localStorage.getItem('razorfy.session')
+    if (!saved) return 'home'
+    const parsed = JSON.parse(saved) as Session
+    return parsed?.user?.role === 'BARBER' ? 'agenda' : 'home'
+  })
   const [selectedServices, setSelectedServices] = useState<string[]>([])
 
   const signIn = (nextSession: Session) => {
     localStorage.setItem('razorfy.session', JSON.stringify(nextSession))
     setSession(nextSession)
+    setNav(nextSession.user.role === 'BARBER' ? 'agenda' : 'home')
   }
 
   const signOut = () => {
     localStorage.removeItem('razorfy.session')
     setSession(null)
     setScreen('home')
+    setNav('home')
     setSelectedServices([])
   }
 
-  if (!session) return <AuthScreen onAuthenticated={signIn} />
+  // Sessão expirada (401 em chamada autenticada): volta ao login automaticamente.
+  useEffect(() => {
+    const onUnauthorized = () => signOut()
+    window.addEventListener('razorfy:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('razorfy:unauthorized', onUnauthorized)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
+  // Callback do OAuth Google: troca o authorization code por sessão.
+  const [oauth, setOauth] = useState<{ exchanging: boolean; error: string }>(() => {
+    const params = new URLSearchParams(window.location.search)
+    const isCallback = window.location.pathname.includes('/auth/google/callback')
+    return { exchanging: isCallback && params.has('code'), error: '' }
+  })
+
+  useEffect(() => {
+    if (!window.location.pathname.includes('/auth/google/callback')) return
+    const params = new URLSearchParams(window.location.search)
+    const savedState = sessionStorage.getItem('razorfy.oauth.state')
+    sessionStorage.removeItem('razorfy.oauth.state')
+    window.history.replaceState({}, '', '/')
+
+    if (params.get('error')) {
+      setOauth({ exchanging: false, error: 'Login com Google cancelado.' })
+      return
+    }
+    const code = params.get('code')
+    if (!code) return
+    if (!savedState || savedState !== params.get('state')) {
+      setOauth({ exchanging: false, error: 'Sessão de login inválida. Tente novamente.' })
+      return
+    }
+    request<Session>('/auth/google', { method: 'POST', body: JSON.stringify({ code }) })
+      .then((s) => { signIn(s); setOauth({ exchanging: false, error: '' }) })
+      .catch((e) => setOauth({ exchanging: false, error: e instanceof Error ? e.message : 'Falha no login com Google.' }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  if (oauth.exchanging) {
+    return (
+      <div className="bg-background min-h-screen flex flex-col items-center justify-center gap-4">
+        <Icon name="progress_activity" className="text-[40px] text-primary animate-spin" />
+        <p className="text-[16px] text-on-surface-variant">Entrando com Google...</p>
+      </div>
+    )
+  }
+
+  if (!session) return <AuthScreen onAuthenticated={signIn} initialError={oauth.error} />
+
+  // Fluxo de agendamento (etapa 2) ocupa a tela toda, sem menu
   if (screen === 'calendar') {
     return (
       <CalendarPage
@@ -180,27 +435,98 @@ function App() {
     )
   }
 
+  const navItems: NavItem[] = session.user.role === 'BARBER' ? BARBER_NAV_ITEMS : CLIENT_NAV_ITEMS
+
+  const page =
+    nav === 'home' ? (
+      <HomePage
+        selectedServices={selectedServices}
+        onToggleService={(id) =>
+          setSelectedServices((current) =>
+            current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
+          )
+        }
+        onSchedule={() => setScreen('calendar')}
+        onLogout={signOut}
+      />
+    ) : nav === 'appointments' ? (
+      <AppointmentsPage session={session} />
+    ) : nav === 'wallet' ? (
+      <WalletPage session={session} />
+    ) : nav === 'agenda' ? (
+      <BarberAgendaPage session={session} />
+    ) : nav === 'schedule' ? (
+      <BarberSchedulePage session={session} />
+    ) : null
+
   return (
-    <HomePage
-      selectedServices={selectedServices}
-      onToggleService={(id) =>
-        setSelectedServices((current) =>
-          current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
-        )
-      }
-      onSchedule={() => setScreen('calendar')}
-      onLogout={signOut}
-    />
+    <AppShell active={nav} navItems={navItems} onNavigate={setNav} onLogout={signOut}>
+      {page}
+    </AppShell>
   )
 }
 
 // ---------- Autenticação ----------
 
-function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+async function startGoogleLogin(onError: (message: string) => void) {
+  try {
+    const state = crypto.randomUUID()
+    sessionStorage.setItem('razorfy.oauth.state', state)
+    const { url } = await request<{ url: string }>(`/auth/google/url?state=${encodeURIComponent(state)}`)
+    window.location.href = url
+  } catch (cause) {
+    onError(cause instanceof Error ? cause.message : 'Não foi possível iniciar o login com Google.')
+  }
+}
+
+function GoogleGlyph() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.02-3.7H.96v2.34A9 9 0 0 0 9 18Z" />
+      <path fill="#FBBC05" d="M3.98 10.72A5.4 5.4 0 0 1 3.7 9c0-.6.1-1.18.28-1.72V4.94H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.06l3.02-2.34Z" />
+      <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.94L3.98 7.28C4.68 5.16 6.66 3.58 9 3.58Z" />
+    </svg>
+  )
+}
+
+function GoogleButton({ label, onError }: { label: string; onError: (message: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => { setBusy(true); startGoogleLogin((m) => { setBusy(false); onError(m) }) }}
+      className="w-full h-14 flex items-center justify-center gap-3 bg-surface-container-lowest border border-on-surface/20 rounded-lg text-[14px] font-semibold text-on-surface hover:bg-surface-container transition-colors disabled:opacity-50"
+    >
+      <GoogleGlyph />
+      {busy ? 'Redirecionando...' : label}
+    </button>
+  )
+}
+
+function AuthDivider() {
+  return (
+    <div className="flex items-center gap-3 my-1">
+      <div className="flex-1 h-px bg-on-surface/15" />
+      <span className="text-[12px] font-medium text-on-surface-variant">ou</span>
+      <div className="flex-1 h-px bg-on-surface/15" />
+    </div>
+  )
+}
+
+function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (session: Session) => void; initialError?: string }) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [error, setError] = useState('')
+  const [error, setError] = useState(initialError)
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [googleEnabled, setGoogleEnabled] = useState(false)
+
+  useEffect(() => {
+    request<{ enabled: boolean }>('/auth/google/status')
+      .then((s) => setGoogleEnabled(s.enabled))
+      .catch(() => setGoogleEnabled(false))
+  }, [])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -256,6 +582,12 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             <PrimaryButton type="submit" disabled={loading} className="mt-1">
               {loading ? 'Entrando...' : 'Entrar'}
             </PrimaryButton>
+            {googleEnabled && (
+              <>
+                <AuthDivider />
+                <GoogleButton label="Entrar com Google" onError={setError} />
+              </>
+            )}
           </form>
           <div className="mt-8 text-center">
             <button onClick={() => { setMode('register'); setError('') }} className="text-on-surface-variant text-[16px] hover:text-primary transition-colors">
@@ -297,6 +629,12 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: Session) =
             <PrimaryButton type="submit" disabled={loading}>
               {loading ? 'Criando conta...' : 'Criar conta'}
             </PrimaryButton>
+            {googleEnabled && (
+              <>
+                <AuthDivider />
+                <GoogleButton label="Cadastrar com Google" onError={setError} />
+              </>
+            )}
           </div>
           <div className="mt-auto pt-8 text-center">
             <p className="text-[16px] text-on-surface-variant">
@@ -324,104 +662,95 @@ function HomePage({
   onLogout: () => void
 }) {
   const [services, setServices] = useState<ServiceItem[]>([])
-  const [category, setCategory] = useState<Category>('Cabelo')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     request<ServiceItem[]>('/services')
-      .then((data) => {
-        setServices(data)
-        const first = CATEGORIES.find((c) => data.some((s) => categoryOf(s) === c))
-        if (first) setCategory(first)
-      })
+      .then(setServices)
       .catch((cause) => setError(cause.message))
       .finally(() => setLoading(false))
   }, [])
 
   const availableCategories = CATEGORIES.filter((c) => services.some((s) => categoryOf(s) === c))
-  const visible = services.filter((s) => categoryOf(s) === category)
 
   const chosen = services.filter((service) => selectedServices.includes(service.id))
   const total = chosen.reduce((sum, service) => sum + Number(service.price), 0)
   const duration = chosen.reduce((sum, service) => sum + service.durationMinutes, 0)
 
   return (
-    <div className="bg-background text-on-background min-h-screen flex flex-col pb-28">
-      <TopBar onLogout={onLogout} />
-      <main className="flex-grow w-full max-w-[1200px] mx-auto px-4 md:px-8 py-4">
+    <div className="flex flex-col min-h-screen pb-48 lg:pb-28">
+      <div className="lg:hidden">
+        <TopBar onLogout={onLogout} />
+      </div>
+      <main className="flex-grow w-full max-w-[1100px] mx-auto px-4 md:px-8 py-4 lg:py-8">
         <div className="mb-6">
           <h1 className="text-[28px] md:text-[32px] font-bold text-on-surface mb-2 tracking-tight">01 · Escolha os serviços</h1>
-          <p className="text-[16px] text-on-surface-variant">Selecione um ou mais serviços para continuar.</p>
+          <p className="text-[16px] text-on-surface-variant">Selecione um ou mais serviços, de qualquer categoria, para continuar.</p>
         </div>
 
         {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
 
-        {/* Abas de categoria */}
-        <div className="flex overflow-x-auto gap-2 pb-2 mb-4 no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
-          {availableCategories.map((c) => (
-            <button
-              key={c}
-              onClick={() => setCategory(c)}
-              className={`whitespace-nowrap px-4 py-2 rounded-full text-[14px] font-semibold border-2 border-secondary transition-colors shrink-0 ${
-                category === c ? 'bg-secondary text-on-secondary shadow-sm' : 'bg-transparent text-secondary hover:bg-surface-container'
-              }`}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-
-        {/* Grade de serviços */}
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {[1, 2, 3].map((i) => (
               <div key={i} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 h-36 animate-pulse" />
             ))}
           </div>
-        ) : visible.length === 0 ? (
+        ) : !services.length ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <Icon name="content_cut" className="text-[64px] text-surface-variant mb-4" />
-            <h3 className="text-[24px] font-bold text-on-surface mb-1">Nenhum serviço encontrado</h3>
-            <p className="text-[16px] text-on-surface-variant max-w-md">Tente outra categoria.</p>
+            <h3 className="text-[24px] font-bold text-on-surface mb-1">Nenhum serviço disponível</h3>
+            <p className="text-[16px] text-on-surface-variant max-w-md">Volte mais tarde ou fale com a barbearia.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {visible.map((service) => {
-              const selected = selectedServices.includes(service.id)
-              return (
-                <button
-                  key={service.id}
-                  onClick={() => onToggleService(service.id)}
-                  className={`bg-surface-container-lowest rounded-xl p-4 cursor-pointer transition-all duration-200 hover:shadow-md text-left group ${
-                    selected ? 'border-2 border-primary bg-primary-fixed' : 'border border-on-surface/10'
-                  }`}
-                >
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-[20px] font-semibold text-on-surface leading-tight">{service.name}</h3>
-                    <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                      selected ? 'border-primary bg-primary' : 'border-on-surface/20 group-hover:border-primary'
-                    }`}>
-                      {selected && <Icon name="check" filled className="text-on-primary text-[16px]" />}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-6 pt-2 border-t border-on-surface/10">
-                    <div className="flex items-center text-tertiary gap-1">
-                      <Icon name="schedule" className="text-[18px]" />
-                      <span className="text-[12px] font-medium">{service.durationMinutes} min</span>
-                    </div>
-                    <span className="text-[14px] font-semibold text-on-surface">{money.format(service.price)}</span>
-                  </div>
-                </button>
-              )
-            })}
+          <div className="flex flex-col gap-10">
+            {availableCategories.map((c) => (
+              <section key={c} id={`categoria-${c}`} className="scroll-mt-20 lg:scroll-mt-6" aria-label={c}>
+                <div className="flex items-center gap-2 mb-3 border-b border-on-surface/10 pb-2">
+                  <Icon name={CATEGORY_META[c].icon} className="text-primary text-[22px]" />
+                  <h2 className="text-[22px] font-bold text-on-surface">{c}</h2>
+                  <span className="text-[12px] font-medium text-on-surface-variant">{CATEGORY_META[c].description}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {services.filter((s) => categoryOf(s) === c).map((service) => {
+                    const selected = selectedServices.includes(service.id)
+                    return (
+                      <button
+                        key={service.id}
+                        onClick={() => onToggleService(service.id)}
+                        className={`bg-surface-container-lowest rounded-xl p-4 cursor-pointer transition-all duration-200 hover:shadow-md text-left group ${
+                          selected ? 'border-2 border-primary bg-primary-fixed' : 'border border-on-surface/10'
+                        }`}
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <h3 className="text-[20px] font-semibold text-on-surface leading-tight">{service.name}</h3>
+                          <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                            selected ? 'border-primary bg-primary' : 'border-on-surface/20 group-hover:border-primary'
+                          }`}>
+                            {selected && <Icon name="check" filled className="text-on-primary text-[16px]" />}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between mt-6 pt-2 border-t border-on-surface/10">
+                          <div className="flex items-center text-tertiary gap-1">
+                            <Icon name="schedule" className="text-[18px]" />
+                            <span className="text-[12px] font-medium">{service.durationMinutes} min</span>
+                          </div>
+                          <span className="text-[14px] font-semibold text-on-surface">{money.format(service.price)}</span>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
         )}
       </main>
 
       {/* CTA fixo */}
-      <div className="fixed bottom-0 left-0 w-full bg-surface-container-lowest border-t-2 border-on-surface z-40 p-4 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
-        <div className="max-w-[1200px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div className="fixed bottom-16 lg:bottom-0 left-0 right-0 lg:left-64 bg-surface-container-lowest border-t-2 border-on-surface z-40 p-4 shadow-[0_-4px_20px_rgba(0,0,0,0.05)]">
+        <div className="max-w-[1100px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex flex-col text-center sm:text-left">
             <span className="text-[14px] font-semibold text-on-surface">
               {selectedServices.length
@@ -447,7 +776,210 @@ function HomePage({
   )
 }
 
-// ---------- Calendário ----------
+// ---------- Meus Horários (CLIENT) ----------
+
+function AppointmentsPage({ session }: { session: Session }) {
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  useEffect(() => {
+    request<Appointment[]>('/appointments/mine', {}, session.accessToken)
+      .then(setAppointments)
+      .catch((cause) => setError(cause.message))
+      .finally(() => setLoading(false))
+  }, [session.accessToken])
+
+  async function handleCancel(id: string) {
+    setCancellingId(id)
+    try {
+      const updated = await request<Appointment>(`/appointments/${id}/cancel`, { method: 'POST' }, session.accessToken)
+      setAppointments((prev) => prev.map((a) => (a.appointmentId === id ? updated : a)))
+      setConfirmId(null)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível cancelar.')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden">
+        <TopBar title="Meus Horários" />
+      </div>
+      <main className="flex-grow w-full max-w-[900px] mx-auto px-4 md:px-8 py-4 lg:py-8">
+        <div className="mb-6 hidden lg:block">
+          <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Meus Horários</h1>
+          <p className="text-[16px] text-on-surface-variant">Histórico e agendamentos futuros.</p>
+        </div>
+
+        {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
+
+        {loading ? (
+          <div className="flex flex-col gap-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 h-28 animate-pulse" />
+            ))}
+          </div>
+        ) : !appointments.length ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Icon name="event_available" className="text-[64px] text-surface-variant mb-4" />
+            <h3 className="text-[20px] font-bold text-on-surface mb-1">Nenhum agendamento encontrado</h3>
+            <p className="text-[16px] text-on-surface-variant">Seu próximo visual vai aparecer aqui.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {appointments.map((appt) => {
+              const canCancel = (appt.status === 'CONFIRMED' || appt.status === 'PENDING_PAYMENT') && canCancelFrontend(appt.startTimestamp)
+              const isConfirming = confirmId === appt.appointmentId
+              return (
+                <div key={appt.appointmentId} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <p className="text-[14px] font-semibold text-on-surface">{appt.barberName}</p>
+                      <p className="text-[12px] text-on-surface-variant">
+                        {new Date(appt.startTimestamp).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        {' — '}
+                        {new Date(appt.endTimestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                    <StatusBadge status={appt.status} />
+                  </div>
+                  <p className="text-[12px] text-on-surface-variant mb-2">{appt.services.map((s) => s.name).join(' + ')}</p>
+                  <div className="flex items-center justify-between border-t border-on-surface/10 pt-2">
+                    <span className="text-[13px] font-semibold text-on-surface">{money.format(appt.amountToPay)}</span>
+                    {(appt.status === 'CONFIRMED' || appt.status === 'PENDING_PAYMENT') && (
+                      isConfirming ? (
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setConfirmId(null)}
+                            className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-on-surface-variant border border-on-surface/20 hover:bg-surface-container"
+                          >
+                            Não
+                          </button>
+                          <button
+                            onClick={() => handleCancel(appt.appointmentId)}
+                            disabled={!!cancellingId}
+                            className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-error text-on-error hover:opacity-80 disabled:opacity-40"
+                          >
+                            {cancellingId === appt.appointmentId ? 'Cancelando...' : 'Confirmar cancelamento'}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => canCancel ? setConfirmId(appt.appointmentId) : undefined}
+                          disabled={!canCancel}
+                          title={!canCancel ? 'Cancelamento disponível apenas com 2h de antecedência' : undefined}
+                          className="px-3 py-1.5 rounded-lg text-[12px] font-medium text-primary border border-primary hover:bg-primary-fixed disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          Cancelar
+                        </button>
+                      )
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+// ---------- Carteira Digital (CLIENT) ----------
+
+function WalletPage({ session }: { session: Session }) {
+  const [wallet, setWallet] = useState<Wallet | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    request<Wallet>('/wallet', {}, session.accessToken)
+      .then(setWallet)
+      .catch((cause) => setError(cause.message))
+      .finally(() => setLoading(false))
+  }, [session.accessToken])
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden">
+        <TopBar title="Carteira" />
+      </div>
+      <main className="flex-grow w-full max-w-[900px] mx-auto px-4 md:px-8 py-4 lg:py-8">
+        <div className="mb-6 hidden lg:block">
+          <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Carteira de Cashback</h1>
+          <p className="text-[16px] text-on-surface-variant">Saldo e extrato de fidelidade.</p>
+        </div>
+
+        {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
+
+        {loading ? (
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[1, 2, 3].map((i) => <div key={i} className="h-24 bg-surface-container-lowest rounded-xl animate-pulse" />)}
+            </div>
+            <div className="flex flex-col gap-2">
+              {[1, 2, 3, 4].map((i) => <div key={i} className="h-14 bg-surface-container-lowest rounded-xl animate-pulse" />)}
+            </div>
+          </div>
+        ) : wallet ? (
+          <>
+            {/* Saldos */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+              <div className="bg-primary text-on-primary rounded-xl p-4">
+                <p className="text-[12px] font-medium opacity-80 mb-1">Disponível</p>
+                <p className="text-[24px] font-bold">{money.format(wallet.availableBalance)}</p>
+              </div>
+              <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+                <p className="text-[12px] font-medium text-on-surface-variant mb-1">Saldo Total</p>
+                <p className="text-[20px] font-bold text-on-surface">{money.format(wallet.balance)}</p>
+              </div>
+              <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+                <p className="text-[12px] font-medium text-on-surface-variant mb-1">Reservado</p>
+                <p className="text-[20px] font-bold text-on-surface">{money.format(wallet.reservedBalance)}</p>
+              </div>
+            </div>
+
+            {/* Extrato */}
+            <h2 className="text-[16px] font-semibold text-on-surface mb-3">Extrato</h2>
+            {wallet.transactions.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center bg-surface-container-low rounded-xl">
+                <Icon name="receipt_long" className="text-[48px] text-on-surface-variant mb-2" />
+                <p className="text-[14px] text-on-surface-variant">Nenhuma transação registrada.</p>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {wallet.transactions.map((tx) => {
+                  const meta = TRANSACTION_META[tx.type] ?? { label: tx.type, icon: 'payments', sign: '', color: 'text-on-surface' }
+                  return (
+                    <div key={tx.id} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl px-4 py-3 flex items-center gap-3">
+                      <Icon name={meta.icon} className={`text-[22px] shrink-0 ${meta.color}`} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[13px] font-medium text-on-surface truncate">{tx.description}</p>
+                        <p className="text-[11px] text-on-surface-variant">
+                          {new Date(tx.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </p>
+                      </div>
+                      <span className={`text-[14px] font-bold shrink-0 ${meta.color}`}>
+                        {meta.sign}{money.format(Math.abs(tx.amount))}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </>
+        ) : null}
+      </main>
+    </div>
+  )
+}
+
+// ---------- Calendário (CLIENT — agendamento com cashback) ----------
 
 function CalendarPage({
   session,
@@ -462,11 +994,14 @@ function CalendarPage({
 }) {
   const [services, setServices] = useState<ServiceItem[]>([])
   const [barbers, setBarbers] = useState<Barber[]>([])
-  const [barberId, setBarberId] = useState<string>('') // '' = sem preferência
+  const [wallet, setWallet] = useState<Wallet | null>(null)
+  const [barberId, setBarberId] = useState<string>('')
   const [date, setDate] = useState(tomorrow)
   const [slots, setSlots] = useState<Map<string, string[]>>(new Map())
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [startTimestamp, setStartTimestamp] = useState('')
+  const [useCashback, setUseCashback] = useState(false)
+  const [cashbackAmount, setCashbackAmount] = useState('')
   const [result, setResult] = useState<Appointment | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -476,13 +1011,22 @@ function CalendarPage({
   const total = chosen.reduce((sum, service) => sum + Number(service.price), 0)
 
   useEffect(() => {
-    Promise.all([request<ServiceItem[]>('/services'), request<Barber[]>('/barbers')])
-      .then(([serviceData, barberData]) => {
-        setServices(serviceData)
-        setBarbers(barberData)
-      })
-      .catch((cause) => setError(cause.message))
-  }, [])
+    Promise.all([
+      request<ServiceItem[]>('/services'),
+      request<Barber[]>('/barbers'),
+      request<Wallet>('/wallet', {}, session.accessToken).catch(() => null),
+    ]).then(([serviceData, barberData, walletData]) => {
+      setServices(serviceData)
+      setBarbers(barberData)
+      if (walletData) {
+        setWallet(walletData)
+        if (walletData.availableBalance > 0) {
+          const maxCashback = Math.min(walletData.availableBalance, total)
+          setCashbackAmount(maxCashback.toFixed(2))
+        }
+      }
+    }).catch((cause) => setError(cause.message))
+  }, [session.accessToken, total])
 
   useEffect(() => {
     if (!date || !duration || !barbers.length) return
@@ -510,11 +1054,18 @@ function CalendarPage({
 
   const times = useMemo(() => [...slots.keys()].sort(), [slots])
 
+  const maxCashback = wallet ? Math.min(wallet.availableBalance, total) : 0
+  const cashbackVal = useCashback ? Math.min(parseFloat(cashbackAmount) || 0, maxCashback) : 0
+  const finalTotal = Math.max(0, total - cashbackVal)
+
   async function book() {
     if (!startTimestamp) return setError('Escolha um horário disponível.')
     const availableBarbers = slots.get(startTimestamp) ?? []
     const chosenBarberId = barberId || availableBarbers[0]
     if (!chosenBarberId) return setError('Horário indisponível. Escolha outro.')
+    if (useCashback && (!cashbackVal || cashbackVal <= 0)) {
+      return setError('Informe um valor de cashback válido.')
+    }
     setError('')
     setLoading(true)
     try {
@@ -524,7 +1075,8 @@ function CalendarPage({
           barberId: chosenBarberId,
           serviceIds: selectedServiceIds,
           startTimestamp,
-          useCashback: false,
+          useCashback,
+          cashbackAmountToApply: useCashback ? cashbackVal : null,
           paymentMethod: 'PRESENTIAL',
         }),
       }, session.accessToken)
@@ -549,7 +1101,10 @@ function CalendarPage({
         <div className="w-full max-w-sm bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 mb-8 grid grid-cols-1 gap-3 text-left">
           <div><small className="text-[12px] text-on-surface-variant block">Profissional</small><strong className="text-[16px] text-on-surface">{result.barberName}</strong></div>
           <div><small className="text-[12px] text-on-surface-variant block">Quando</small><strong className="text-[16px] text-on-surface">{new Date(result.startTimestamp).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</strong></div>
-          <div><small className="text-[12px] text-on-surface-variant block">Valor</small><strong className="text-[16px] text-on-surface">{money.format(result.amountToPay)}</strong></div>
+          {result.cashbackUsed > 0 && (
+            <div><small className="text-[12px] text-on-surface-variant block">Cashback aplicado</small><strong className="text-[16px] text-green-700">-{money.format(result.cashbackUsed)}</strong></div>
+          )}
+          <div><small className="text-[12px] text-on-surface-variant block">Valor a pagar</small><strong className="text-[16px] text-on-surface">{money.format(result.amountToPay)}</strong></div>
         </div>
         <div className="w-full max-w-sm">
           <PrimaryButton onClick={onBack}>Fazer novo agendamento</PrimaryButton>
@@ -651,6 +1206,43 @@ function CalendarPage({
               </div>
             )}
 
+            {/* Cashback */}
+            {wallet && wallet.availableBalance > 0 && (
+              <div className="bg-surface-container-low rounded-xl p-3 border border-on-surface/10">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useCashback}
+                    onChange={(e) => {
+                      setUseCashback(e.target.checked)
+                      if (e.target.checked) {
+                        setCashbackAmount(Math.min(wallet.availableBalance, total).toFixed(2))
+                      }
+                    }}
+                    className="w-4 h-4 accent-primary"
+                  />
+                  <span className="text-[13px] font-semibold text-on-surface">
+                    Usar cashback disponível ({money.format(wallet.availableBalance)})
+                  </span>
+                </label>
+                {useCashback && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-[12px] text-on-surface-variant">Valor:</span>
+                    <input
+                      type="number"
+                      min="0.01"
+                      max={maxCashback.toFixed(2)}
+                      step="0.01"
+                      value={cashbackAmount}
+                      onChange={(e) => setCashbackAmount(e.target.value)}
+                      className="w-28 h-9 px-2 bg-surface-container-lowest border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
+                    />
+                    <span className="text-[12px] text-on-surface-variant">→ paga {money.format(finalTotal)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {error && <ErrorBanner message={error} />}
           </div>
         </div>
@@ -666,7 +1258,12 @@ function CalendarPage({
                 : 'Escolha um horário'}
             </span>
             <span className="text-[12px] font-medium text-on-surface-variant">
-              {duration} min • <strong className="text-primary">{money.format(total)}</strong>
+              {duration} min •{' '}
+              {useCashback && cashbackVal > 0 ? (
+                <><s className="opacity-50">{money.format(total)}</s>{' '}<strong className="text-primary">{money.format(finalTotal)}</strong></>
+              ) : (
+                <strong className="text-primary">{money.format(total)}</strong>
+              )}
             </span>
           </div>
           <button
@@ -678,6 +1275,424 @@ function CalendarPage({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ---------- Agenda do Barbeiro ----------
+
+type AgendaFilter = 'hoje' | 'semana' | 'mes' | 'custom'
+type AgendaStatus = 'all' | 'pending' | 'concluded' | 'cancelled'
+
+const AGENDA_PERIOD_CHIPS: { key: Exclude<AgendaFilter, 'custom'>; label: string }[] = [
+  { key: 'hoje', label: 'Hoje' },
+  { key: 'semana', label: 'Semana' },
+  { key: 'mes', label: 'Mês' },
+]
+
+const AGENDA_STATUS_CHIPS: { key: AgendaStatus; label: string }[] = [
+  { key: 'all', label: 'Todos' },
+  { key: 'pending', label: 'Pendentes' },
+  { key: 'concluded', label: 'Concluídos' },
+  { key: 'cancelled', label: 'Cancelados' },
+]
+
+// Agrupa os status do domínio nas categorias visíveis ao barbeiro.
+const AGENDA_STATUS_GROUPS: Record<Exclude<AgendaStatus, 'all'>, string[]> = {
+  pending: ['CONFIRMED', 'PENDING_PAYMENT'],
+  concluded: ['CONCLUDED'],
+  cancelled: ['CANCELLED', 'EXPIRED_PAYMENT', 'CANCELLED_OVERBOOKING'],
+}
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '?'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
+
+function agendaRange(filter: AgendaFilter, customDate: string): { start: Date; end: Date } {
+  const now = new Date()
+  const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0)
+  const dayEnd = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999)
+
+  if (filter === 'custom' && customDate) {
+    const [y, m, d] = customDate.split('-').map(Number)
+    const base = new Date(y, m - 1, d)
+    return { start: dayStart(base), end: dayEnd(base) }
+  }
+
+  if (filter === 'semana') {
+    const dow = now.getDay() === 0 ? 6 : now.getDay() - 1 // Monday=0
+    const start = dayStart(now); start.setDate(start.getDate() - dow)
+    const end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23, 59, 59, 999)
+    return { start, end }
+  }
+
+  if (filter === 'mes') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1)
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+    return { start, end }
+  }
+
+  // hoje
+  return { start: dayStart(now), end: dayEnd(now) }
+}
+
+function BarberAgendaPage({ session }: { session: Session }) {
+  const [appointments, setAppointments] = useState<Appointment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [filter, setFilter] = useState<AgendaFilter>('hoje')
+  const [customDate, setCustomDate] = useState('')
+  const [statusFilter, setStatusFilter] = useState<AgendaStatus>('all')
+  const [concludingId, setConcludingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    request<Appointment[]>('/appointments/mine', {}, session.accessToken)
+      .then(setAppointments)
+      .catch((cause) => setError(cause.message))
+      .finally(() => setLoading(false))
+  }, [session.accessToken])
+
+  const filtered = useMemo(() => {
+    const { start, end } = agendaRange(filter, customDate)
+    const allowed = statusFilter === 'all' ? null : AGENDA_STATUS_GROUPS[statusFilter]
+    return appointments
+      .filter((a) => {
+        const t = new Date(a.startTimestamp).getTime()
+        if (t < start.getTime() || t > end.getTime()) return false
+        if (allowed && !allowed.includes(a.status)) return false
+        return true
+      })
+      .sort((a, b) => new Date(a.startTimestamp).getTime() - new Date(b.startTimestamp).getTime())
+  }, [appointments, filter, customDate, statusFilter])
+
+  async function handleConclude(id: string) {
+    setConcludingId(id)
+    try {
+      const updated = await request<Appointment>(`/appointments/${id}/conclude`, { method: 'POST' }, session.accessToken)
+      setAppointments((prev) => prev.map((a) => (a.appointmentId === id ? updated : a)))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível concluir o atendimento.')
+    } finally {
+      setConcludingId(null)
+    }
+  }
+
+  const customLabel = customDate
+    ? new Date(customDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+    : 'Data'
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden">
+        <TopBar title="Minha Agenda" right={<Avatar name={session.user.name} size={36} />} />
+      </div>
+      <main className="flex-grow w-full max-w-[900px] mx-auto px-4 md:px-8 py-4 lg:py-8">
+        <div className="mb-4 hidden lg:block">
+          <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Minha Agenda</h1>
+        </div>
+
+        {/* Filtros de período + data personalizada */}
+        <div className="flex items-center gap-2 mb-3 overflow-x-auto">
+          {AGENDA_PERIOD_CHIPS.map(({ key, label }) => {
+            const isActive = filter === key
+            return (
+              <button
+                key={key}
+                onClick={() => setFilter(key)}
+                className={`px-4 py-1.5 rounded-full text-[13px] font-semibold whitespace-nowrap transition-colors ${
+                  isActive
+                    ? 'bg-primary text-on-primary shadow-sm'
+                    : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+                }`}
+              >
+                {label}
+              </button>
+            )
+          })}
+          {/* Botão calendário (datas personalizadas) — input nativo sobreposto */}
+          <label
+            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-semibold whitespace-nowrap cursor-pointer transition-colors ${
+              filter === 'custom'
+                ? 'bg-primary text-on-primary shadow-sm'
+                : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'
+            }`}
+            title="Escolher data específica"
+          >
+            <Icon name="calendar_month" className="text-[18px]" />
+            {filter === 'custom' && <span>{customLabel}</span>}
+            <input
+              type="date"
+              value={customDate}
+              onChange={(e) => { setCustomDate(e.target.value); setFilter('custom') }}
+              className="absolute inset-0 opacity-0 cursor-pointer"
+              aria-label="Data específica"
+            />
+          </label>
+        </div>
+
+        {/* Subfiltros de status */}
+        <div className="flex flex-wrap gap-2 mb-5">
+          {AGENDA_STATUS_CHIPS.map(({ key, label }) => {
+            const isActive = statusFilter === key
+            return (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className={`px-3 py-1 rounded-full text-[12px] font-medium border transition-colors ${
+                  isActive
+                    ? 'border-secondary text-secondary bg-secondary-fixed/40'
+                    : 'border-on-surface/15 text-on-surface-variant hover:border-on-surface/30 hover:text-on-surface'
+                }`}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+
+        {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
+
+        {loading ? (
+          <div className="flex flex-col gap-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="bg-surface-container-lowest rounded-2xl p-4 h-28 animate-pulse shadow-sm" />
+            ))}
+          </div>
+        ) : !filtered.length ? (
+          <div className="flex flex-col items-center justify-center py-12 text-center">
+            <Icon name="event_busy" className="text-[64px] text-surface-variant mb-4" />
+            <h3 className="text-[20px] font-bold text-on-surface mb-1">Nenhum atendimento neste filtro</h3>
+            <p className="text-[16px] text-on-surface-variant">Tente outro período ou status.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {filtered.map((appt) => {
+              const start = new Date(appt.startTimestamp)
+              const end = new Date(appt.endTimestamp)
+              return (
+                <div
+                  key={appt.appointmentId}
+                  className="bg-surface-container-lowest rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow border border-on-surface/5"
+                >
+                  <div className="flex items-start gap-3">
+                    <Avatar name={appt.clientName ?? '?'} size={44} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-[16px] font-bold text-on-surface truncate">{appt.clientName ?? '—'}</p>
+                        <StatusBadge status={appt.status} />
+                      </div>
+                      <p className="flex items-center gap-1 text-[13px] font-medium text-on-surface-variant mt-0.5">
+                        <Icon name="schedule" className="text-[16px]" />
+                        <span>
+                          {start.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}
+                          {' · '}
+                          {start.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          {' — '}
+                          {end.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-on-surface/10 flex flex-col gap-1.5">
+                    {appt.services.map((s, i) => (
+                      <div key={i} className="flex items-center justify-between text-[13px]">
+                        <span className="text-on-surface-variant truncate pr-2">{s.name}</span>
+                        <span className="text-on-surface font-semibold whitespace-nowrap">{money.format(s.price)}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-[12px] text-on-surface-variant">Total</span>
+                      <span className="text-[15px] font-bold text-on-surface">{money.format(appt.amountToPay)}</span>
+                    </div>
+                    {appt.status === 'CONFIRMED' && (
+                      <button
+                        onClick={() => handleConclude(appt.appointmentId)}
+                        disabled={concludingId === appt.appointmentId}
+                        className="px-4 py-2 rounded-lg text-[12px] font-semibold bg-primary text-on-primary hover:bg-primary-container disabled:opacity-40 transition-colors shadow-sm active:scale-95"
+                      >
+                        {concludingId === appt.appointmentId ? 'Concluindo...' : 'Concluir'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+// ---------- Configuração de Expediente (BARBER) ----------
+
+type SlotState = {
+  active: boolean
+  startTime: string
+  endTime: string
+  lunchStart: string
+  lunchEnd: string
+}
+
+function BarberSchedulePage({ session }: { session: Session }) {
+  const defaultSlots: Record<number, SlotState> = Object.fromEntries(
+    WEEKDAYS.map(({ day }) => [day, { active: false, startTime: '09:00', endTime: '18:00', lunchStart: '12:00', lunchEnd: '13:00' }])
+  )
+  const [slots, setSlots] = useState<Record<number, SlotState>>(defaultSlots)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => {
+    request<BarberSlotData[]>(`/barbers/${session.user.id}/slots`, {}, session.accessToken)
+      .then((data) => {
+        setSlots((prev) => {
+          const next = { ...prev }
+          for (const s of data) {
+            next[s.dayOfWeek] = {
+              active: true,
+              startTime: s.startTime,
+              endTime: s.endTime,
+              lunchStart: s.lunchStart ?? '12:00',
+              lunchEnd: s.lunchEnd ?? '13:00',
+            }
+          }
+          return next
+        })
+      })
+      .catch((cause) => setError(cause.message))
+      .finally(() => setLoading(false))
+  }, [session.user.id, session.accessToken])
+
+  function updateSlot(day: number, field: keyof SlotState, value: string | boolean) {
+    setSlots((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }))
+  }
+
+  async function save() {
+    setError('')
+    setSuccess('')
+    setSaving(true)
+    const body: BarberSlotData[] = WEEKDAYS
+      .filter(({ day }) => slots[day].active)
+      .map(({ day }) => ({
+        dayOfWeek: day,
+        startTime: slots[day].startTime,
+        endTime: slots[day].endTime,
+        lunchStart: slots[day].lunchStart || null,
+        lunchEnd: slots[day].lunchEnd || null,
+      }))
+    try {
+      await request(`/barbers/${session.user.id}/slots`, { method: 'PUT', body: JSON.stringify(body) }, session.accessToken)
+      setSuccess('Expediente salvo com sucesso!')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível salvar.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden">
+        <TopBar title="Meu Expediente" />
+      </div>
+      <main className="flex-grow w-full max-w-[900px] mx-auto px-4 md:px-8 py-4 lg:py-8">
+        <div className="mb-6 hidden lg:block">
+          <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Meu Expediente</h1>
+          <p className="text-[16px] text-on-surface-variant">Configure os dias e horários de atendimento.</p>
+        </div>
+
+        {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
+        {success && <div className="mb-4"><SuccessBanner message={success} /></div>}
+
+        {loading ? (
+          <div className="flex flex-col gap-3">
+            {WEEKDAYS.map(({ day }) => (
+              <div key={day} className="h-20 bg-surface-container-lowest rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {WEEKDAYS.map(({ day, label }) => {
+              const slot = slots[day]
+              return (
+                <div
+                  key={day}
+                  className={`bg-surface-container-lowest border rounded-xl p-4 transition-colors ${
+                    slot.active ? 'border-secondary/40' : 'border-on-surface/10 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={slot.active}
+                        onChange={(e) => updateSlot(day, 'active', e.target.checked)}
+                        className="w-4 h-4 accent-secondary"
+                      />
+                      <span className="text-[14px] font-semibold text-on-surface">{label}</span>
+                    </label>
+                  </div>
+                  {slot.active && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-on-surface-variant font-medium">Entrada</span>
+                        <input
+                          type="time"
+                          value={slot.startTime}
+                          onChange={(e) => updateSlot(day, 'startTime', e.target.value)}
+                          className="h-10 px-2 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-on-surface-variant font-medium">Saída</span>
+                        <input
+                          type="time"
+                          value={slot.endTime}
+                          onChange={(e) => updateSlot(day, 'endTime', e.target.value)}
+                          className="h-10 px-2 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-on-surface-variant font-medium">Almoço início</span>
+                        <input
+                          type="time"
+                          value={slot.lunchStart}
+                          onChange={(e) => updateSlot(day, 'lunchStart', e.target.value)}
+                          className="h-10 px-2 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[11px] text-on-surface-variant font-medium">Almoço fim</span>
+                        <input
+                          type="time"
+                          value={slot.lunchEnd}
+                          onChange={(e) => updateSlot(day, 'lunchEnd', e.target.value)}
+                          className="h-10 px-2 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div className="mt-6 max-w-xs">
+          <PrimaryButton onClick={save} disabled={saving || loading}>
+            {saving ? 'Salvando...' : 'Salvar expediente'}
+          </PrimaryButton>
+        </div>
+      </main>
     </div>
   )
 }

@@ -6,11 +6,20 @@ interface AppointmentData {
   id: string;
   clientId: string;
   clientName: string;
-  clientPhone: string;
+  clientPhone: string | null;
   barberName: string;
   startTimestamp: Date;
   status: string;
 }
+
+type OutboxRow = {
+  appointmentId: string;
+  channel: string;
+  destination: string;
+  eventType: string;
+  payload: Prisma.InputJsonValue;
+  nextAttemptAt: Date;
+};
 
 export async function appointmentEvent(tx: Tx, appt: AppointmentData, eventType: string) {
   const payload: Prisma.InputJsonValue = {
@@ -21,12 +30,14 @@ export async function appointmentEvent(tx: Tx, appt: AppointmentData, eventType:
     status: appt.status,
   };
   const now = new Date();
-  await tx.notificationOutbox.createMany({
-    data: [
-      { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType, payload, nextAttemptAt: now },
-      { appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType, payload, nextAttemptAt: now },
-    ],
-  });
+  const rows: OutboxRow[] = [
+    { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType, payload, nextAttemptAt: now },
+  ];
+  // WhatsApp só quando há telefone (contas criadas via Google podem não ter).
+  if (appt.clientPhone) {
+    rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType, payload, nextAttemptAt: now });
+  }
+  await tx.notificationOutbox.createMany({ data: rows });
 }
 
 export async function scheduleReminder(tx: Tx, appt: AppointmentData) {
@@ -37,10 +48,11 @@ export async function scheduleReminder(tx: Tx, appt: AppointmentData) {
     startTimestamp: appt.startTimestamp.toISOString(),
     barberName: appt.barberName,
   };
-  await tx.notificationOutbox.createMany({
-    data: [
-      { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType: 'APPOINTMENT_REMINDER', payload, nextAttemptAt: remindAt },
-      { appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType: 'APPOINTMENT_REMINDER', payload, nextAttemptAt: remindAt },
-    ],
-  });
+  const rows: OutboxRow[] = [
+    { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType: 'APPOINTMENT_REMINDER', payload, nextAttemptAt: remindAt },
+  ];
+  if (appt.clientPhone) {
+    rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType: 'APPOINTMENT_REMINDER', payload, nextAttemptAt: remindAt });
+  }
+  await tx.notificationOutbox.createMany({ data: rows });
 }

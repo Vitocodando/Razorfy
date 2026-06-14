@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-11
+last_updated: 2026-06-13T14:05:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -91,12 +91,13 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | Área | Situação |
 | --- | --- |
 | Cadastro e login de clientes | `IMPLEMENTED` |
+| Login social Google (OAuth 2.0) | `IMPLEMENTED` |
 | JWT e autorização por perfil | `IMPLEMENTED` |
 | Catálogo público de serviços | `IMPLEMENTED` para consulta |
 | Gestão administrativa de serviços | `PLANNED` |
 | Consulta de barbeiros | `IMPLEMENTED` |
 | Disponibilidade dinâmica | `IMPLEMENTED` |
-| Gestão da jornada pelo barbeiro | `PLANNED` |
+| Gestão da jornada pelo barbeiro | `IMPLEMENTED` |
 | Agendamento de múltiplos serviços | `IMPLEMENTED` |
 | PIX local/simulado | `IMPLEMENTED` |
 | Gateway PIX real | `PLANNED` |
@@ -180,13 +181,15 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 
 ### FEAT-007 - Jornada individual do barbeiro
 
-- `status`: `PARTIAL`
+- `status`: `IMPLEMENTED`
 - `area`: `SCHEDULE`
 - `actors`: `BARBER`, `ADMIN`
 - `description`: Jornada semanal, início, fim e intervalo de almoço persistidos por profissional.
-- `implemented`: modelo, migration, validação e dados de desenvolvimento.
-- `missing`: endpoints e interface para edição da jornada e bloqueios extraordinários.
+- `implemented`: modelo, migration, validação, dados de desenvolvimento, endpoints REST e interface de configuração.
+- `api`: `GET /barbers/:id/slots`, `PUT /barbers/:id/slots`
+- `frontend`: painel de expediente em `BarberSchedulePage` (FEAT-055).
 - `acceptance`: jornada válida não pode ter fim anterior ao início; almoço deve estar contido na jornada.
+- `depends_on`: `FEAT-055`
 
 ### FEAT-008 - Disponibilidade dinâmica
 
@@ -586,6 +589,161 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
+### FEAT-050 - Catálogo em lista seccionada e shell de navegação do app
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: Substitui as abas de categoria do catálogo por uma lista única seccionada (Cabelo, Barba, Sobrancelha, Especiais visíveis ao mesmo tempo, cada uma com cabeçalho próprio com ícone e descrição), permitindo selecionar serviços de categorias diferentes sem alternar telas. Introduz o componente `AppShell` com menu de navegação entre features: menu lateral fixo no desktop (breakpoint `lg`) e menu inferior no mobile.
+- `business_rules`: o menu navega entre features do app (não entre categorias); itens declarados no array central `NAV_ITEMS` — inicialmente apenas `home` (Início); novas features entram adicionando item ao array e um caso no switch de páginas do `App`; logout no rodapé do menu lateral (desktop) e na top bar (mobile); o fluxo de agendamento (calendário) abre em tela cheia, fora do shell.
+- `api`: `NONE` — nenhuma alteração de backend.
+- `frontend`: `frontend/src/App.tsx` (novos `NAV_ITEMS`, `NavKey` e `AppShell`; `HomePage` reescrita como lista seccionada; novo mapa `CATEGORY_META` com ícone e descrição por categoria); CTA fixo posicionado acima do menu inferior no mobile e ao lado do menu lateral no desktop.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-049`
+- `acceptance`: cliente vê todas as categorias em uma única rolagem e seleciona serviços de categorias distintas sem trocar de aba; menu lateral (desktop) e inferior (mobile) exibem as features do app, com `Início` ativo; estrutura comporta novos itens de menu sem retrabalho de layout.
+- `tests`: build de produção aprovado (`tsc -b && vite build`).
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-051 - Meus Horários do cliente
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: Tela que lista todos os agendamentos do cliente em ordem decrescente, com badge de status, horário, barbeiro, serviços e botão de cancelamento.
+- `business_rules`: botão "Cancelar" visível somente para `CONFIRMED` e `PENDING_PAYMENT`; desabilitado quando faltar menos de 2 horas para o atendimento; confirmação inline antes de chamar a API; estado local atualizado na resposta.
+- `api`: `GET /api/v1/appointments/mine`, `POST /api/v1/appointments/{id}/cancel`
+- `frontend`: `AppointmentsPage` em `frontend/src/App.tsx`; acessível pelo item "Meus Horários" no `AppShell`.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-023`, `FEAT-050`
+- `acceptance`: cliente vê histórico; cancelamento dentro da janela atualiza o badge na mesma tela; cancelamento fora da janela fica desabilitado.
+- `tests`: build de produção aprovado (`tsc -b && vite build`).
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-052 - Carteira digital de cashback (frontend)
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: Tela com três cards de saldo (disponível em destaque, total e reservado) e extrato de transações com tipo, ícone, descrição e valor assinado.
+- `business_rules`: `CREDIT` verde `+`; `DEBIT` vermelho `-`; `RESERVE`/`RELEASE` amarelo; empty state quando sem transações.
+- `api`: `GET /api/v1/wallet`
+- `frontend`: `WalletPage` em `frontend/src/App.tsx`; acessível pelo item "Carteira" no `AppShell`.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-018`, `FEAT-021`, `FEAT-050`
+- `acceptance`: saldos batem com a resposta da API; extrato exibe tipo e valor corretos.
+- `tests`: build de produção aprovado.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-053 - Abatimento de cashback no checkout (frontend)
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: No calendário de agendamento, quando o cliente possui saldo disponível, exibe toggle "Usar cashback" com input de valor pré-preenchido com o menor entre saldo disponível e total; valor final é recalculado em tempo real.
+- `business_rules`: input limitado ao máximo permitido; toggle desmarcado envia `useCashback: false`; toggle marcado exige valor > 0; o backend valida e recusa se exceder total ou saldo.
+- `api`: `GET /api/v1/wallet` (fetch no mount do `CalendarPage`); `POST /api/v1/appointments` com campos `useCashback` e `cashbackAmountToApply`.
+- `frontend`: `CalendarPage` em `frontend/src/App.tsx`.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-019`, `FEAT-049`, `FEAT-052`
+- `acceptance`: cliente com saldo vê o toggle; ao confirmar, o resumo do sucesso exibe o cashback aplicado e o valor final reduzido.
+- `tests`: build de produção aprovado.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-054 - Agenda do barbeiro
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `BARBER`
+- `description`: Tela com date picker (padrão hoje) que filtra a lista de agendamentos do dia. Exibe nome do cliente, horário, serviços, status badge e botão "Concluir atendimento" para agendamentos `CONFIRMED`.
+- `business_rules`: fetch único na montagem; filtro de data no cliente; concluir chama `POST /appointments/:id/conclude`; status atualizado localmente na resposta.
+- `api`: `GET /api/v1/appointments/mine`, `POST /api/v1/appointments/{id}/conclude`
+- `frontend`: `BarberAgendaPage` em `frontend/src/App.tsx`; acessível pelo item "Agenda" no `AppShell` de barbeiros.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-024`, `FEAT-050`
+- `acceptance`: barbeiro vê apenas seus clientes do dia; clicar "Concluir" muda o badge para `CONCLUDED` e gera cashback ao cliente.
+- `tests`: build de produção aprovado.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-055 - Configuração de expediente (frontend)
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `BARBER`
+- `description`: Painel com 7 linhas (Segunda a Domingo). Cada linha possui toggle de ativo, inputs de entrada/saída e inputs de almoço (início/fim). Ao salvar, envia apenas dias ativos via `PUT /barbers/:id/slots`.
+- `business_rules`: dias inativos não são enviados (backend deleta os ausentes); almoço opcional por dia; validação no backend (início < fim, almoço dentro do expediente).
+- `api`: `GET /barbers/:id/slots`, `PUT /barbers/:id/slots`
+- `frontend`: `BarberSchedulePage` em `frontend/src/App.tsx`; acessível pelo item "Expediente" no `AppShell` de barbeiros.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-007`, `FEAT-050`
+- `acceptance`: barbeiro ativa Segunda 09:00–18:00 com almoço 12:00–13:00 e salva; disponibilidade reflete o expediente configurado.
+- `tests`: build de produção aprovado.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-056 - Concluir atendimento (frontend)
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `BARBER`
+- `description`: Botão "Concluir atendimento" na `BarberAgendaPage` para agendamentos `CONFIRMED`. Chama `POST /appointments/:id/conclude`, atualiza o card localmente para `CONCLUDED`.
+- `business_rules`: visível somente para `CONFIRMED`; barbeiro só conclui atendimentos próprios (validado no backend); após conclusão o badge muda para azul "Concluído" e o botão desaparece; cashback é creditado ao cliente.
+- `api`: `POST /api/v1/appointments/{id}/conclude`
+- `frontend`: inline em `BarberAgendaPage` (`FEAT-054`).
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-024`, `FEAT-054`
+- `acceptance`: barbeiro clica "Concluir", status muda para `CONCLUDED` e saldo de cashback do cliente é incrementado.
+- `tests`: build de produção aprovado.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-057 - Login social com Google (OAuth 2.0)
+
+- `status`: `IMPLEMENTED`
+- `area`: `AUTH`
+- `actors`: `CLIENT`, `BARBER`, `ADMIN`, `DEV`
+- `description`: Login e cadastro via Google usando OAuth 2.0 Authorization Code. O frontend gera `state` (CSRF, em `sessionStorage`), redireciona para a URL de autorização do Google; o Google retorna a `/auth/google/callback?code&state`; o frontend valida o `state` e envia o `code` ao backend, que troca por tokens, valida o ID token (assinatura, `aud`, `iss`, `email_verified`) e abre sessão Razorfy (mesmo contrato `{ accessToken, user }`).
+- `business_rules`: o `client_secret` é confidencial e fica apenas no backend (cliente confidencial faz a troca do code); estratégia de conta — vincula por `google_id`; senão por e-mail verificado preservando o papel existente (BARBER/ADMIN continuam staff); senão cria novo `CLIENT`. Convive com login por e-mail/senha (FEAT-001/002). Contas criadas só via Google não têm senha local nem telefone: tentativa de login por senha retorna `USE_GOOGLE_LOGIN`; notificações WhatsApp são omitidas quando não há telefone (push continua).
+- `api`: `GET /api/v1/auth/google/status` (`{ enabled }`), `GET /api/v1/auth/google/url?state=` (`{ url }`), `POST /api/v1/auth/google` (`{ code }` → sessão). Quando as variáveis de ambiente não estão configuradas, os endpoints de URL/troca respondem `503 OAUTH_DISABLED` e o status responde `{ enabled: false }`.
+- `frontend`: `frontend/src/App.tsx` — botão "Entrar/Cadastrar com Google" (renderizado só quando `enabled`), `startGoogleLogin`, tratamento do callback no `App()` com tela de transição, tipo `User.phone` agora `string | null`.
+- `configuration`: backend `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (ver `backend/.env.example`); o redirect URI deve ser registrado no Google Cloud Console e casar exatamente. Em produção estática, a rota `/auth/google/callback` precisa de fallback para `index.html` (SPA).
+- `security`: `client_secret` nunca versionado (placeholders vazios no `.env.example`); ID token verificado via `google-auth-library`; e-mails não verificados rejeitados; `state` valida CSRF no retorno.
+- `database_changes`: `0003_oauth_google` — `users.password` e `users.phone` passam a aceitar `NULL`; nova coluna `google_id VARCHAR(255)` com `UNIQUE`; `CHECK (password IS NOT NULL OR google_id IS NOT NULL)` garante ao menos um meio de autenticação.
+- `api_compatibility`: `COMPATIBLE` (campos de auth inalterados; `phone` pode vir `null` para contas Google).
+- `depends_on`: `FEAT-002`, `FEAT-036`
+- `acceptance`: com credenciais configuradas, o usuário entra com Google e recebe sessão; novo usuário vira `CLIENT`; e-mail já existente como BARBER/ADMIN é vinculado preservando o papel; sem credenciais, o botão não aparece e o e-mail/senha continua funcionando.
+- `tests`: `tsc` backend e build de produção do frontend aprovados; smoke test sem credenciais — `status: {enabled:false}`, `url` e `POST /google` retornam `503 OAUTH_DISABLED`, login por e-mail/senha mantém `200`. Fluxo OAuth completo requer credenciais reais do Google (não exercitado aqui).
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-058 - Redesign UI/UX da tela "Minha Agenda" (barbeiro)
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `BARBER`
+- `description`: Refinamento de usabilidade/visual da agenda do barbeiro. Filtros de período reduzidos a chips "Hoje", "Semana" e "Mês"; trimestre/semestre/ano substituídos por um ícone de calendário que abre seletor de data específica (filtro `custom`). Nova linha de subfiltros de status (chips discretos com borda fina): "Todos", "Pendentes", "Concluídos", "Cancelados". Cards redesenhados com avatar de iniciais do cliente, nome em destaque, data+hora em tom neutro (não mais vermelho), serviços listados com preço alinhado à direita, total e ação "Concluir" no rodapé, sombra leve. Bottom navigation no estilo nativo (indicador superior + pílula no ícone ativo em vermelho da marca; inativo neutro). Header mobile ganha avatar do profissional à direita para equilíbrio.
+- `business_rules`: subfiltros mapeiam status do domínio — Pendentes = `CONFIRMED` + `PENDING_PAYMENT`; Concluídos = `CONCLUDED`; Cancelados = `CANCELLED` + `EXPIRED_PAYMENT` + `CANCELLED_OVERBOOKING`. Período `semana` = semana corrente (segunda a domingo); `custom` = dia escolhido. Fonte da marca (Montserrat, FEAT-047) preservada — não trocada por Inter/Roboto.
+- `api`: `NONE` — reutiliza `GET /appointments/mine` e `POST /appointments/{id}/conclude`.
+- `frontend`: `frontend/src/App.tsx` — `BarberAgendaPage` (filtros, subfiltros, card), novo componente `Avatar` + helper `initials`, `agendaRange(filter, customDate)`, `TopBar` com slot `right`, bottom nav do `AppShell` reestilizado.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-054`, `FEAT-050`
+- `acceptance`: barbeiro filtra por Hoje/Semana/Mês ou data específica; filtra por status; cada card mostra cliente (com avatar), data e hora em tom neutro, serviço com preço e total; bottom nav destaca a aba ativa em vermelho.
+- `tests`: build de produção aprovado (`tsc -b && vite build`).
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -781,6 +939,49 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `api_compatibility`: `COMPATIBLE` (restaura o contrato original consumido por frontend e mobile)
 - `verification`: login retornou `{ accessToken, user }` com todos os campos; `GET /appointments/mine` retornou DTO com `appointmentId`, `amountToPay: 35` (número), `barberName` e `services[].name`; preços do catálogo como números JSON.
 - `regression_test`: recomendado teste de contrato (schema JSON) das respostas de auth, appointments, services e wallet — candidato prioritário para o futuro script de TDD.
+- `release`: `UNRELEASED`
+
+### BUG-2026-010 - Conclusão de atendimento falhava ao creditar cashback (Decimal em raw dentro de transação)
+
+- `status`: `VERIFIED`
+- `priority`: `P1`
+- `risk`: `HIGH`
+- `feature_ids`: `FEAT-020`, `FEAT-024`, `FEAT-056`
+- `reported_at`: `2026-06-13`
+- `reported_by`: usuário, ao concluir atendimento pela agenda do barbeiro.
+- `environment`: desenvolvimento local, backend Node.js + Prisma 6.19.3 + Supabase PostgreSQL.
+- `symptom`: `POST /api/v1/appointments/{id}/conclude` retornava `500 INTERNAL_ERROR`; o status do agendamento permanecia `CONFIRMED` (transação revertida) e nenhum cashback era creditado.
+- `expected_behavior`: status muda para `CONCLUDED`, cashback é creditado e a resposta retorna o DTO do agendamento (`200`).
+- `reproduction_steps`: logar como `BARBER`, concluir um agendamento `CONFIRMED` cujo `amount_paid * CASHBACK_RATE` resulte em valor maior que zero.
+- `evidence`: `PrismaClientValidationError` em `updateWallet` (`cashback.service.ts:120`): `Could not convert from "JSON decimal value" to "PrismaValue". Expected Flat JSON array (no nesting)`, com `parameters` contendo `{"prisma__type":"decimal","prisma__value":7}`.
+- `root_cause`: `updateWallet` passava instâncias de `Prisma.Decimal` como parâmetros de `$executeRaw` executado dentro de uma transação interativa (`prisma.$transaction(async tx => ...)`). O engine do Prisma 6.x não serializa o wrapper `{prisma__type:"decimal"}` nesse caminho, exigindo um array JSON plano. O bug só se manifestava quando o cashback creditado era maior que zero (caminho `creditEarned` → `updateWallet`); os fluxos de criação presencial sem cashback retornavam cedo e nunca exercitavam o `UPDATE` com Decimal.
+- `resolution`: `updateWallet` reescrito para usar `tx.cashbackWallet.updateMany({ where: { id, version }, data: { balance, reservedBalance, version: { increment: 1 } } })`, mantendo a guarda de versão (lock otimista) com a API tipada do Prisma, eliminando a serialização de Decimal em SQL cru.
+- `files_changed`: `backend/src/cashback/cashback.service.ts`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: conclusão via HTTP retornou `200` com DTO `CONCLUDED`; cashback de R$ 3,50 (sobre R$ 35,00 a 10%) creditado na carteira do cliente; `tsc --noEmit` sem erros.
+- `regression_test`: recomendado teste de integração de conclusão exercitando o crédito de cashback (valor > 0) — auditar demais usos de `$executeRaw`/`$queryRaw` com `Prisma.Decimal` em transações.
+- `release`: `UNRELEASED`
+
+### BUG-2026-011 - Token expirado prendia o usuário em tela de erro
+
+- `status`: `VERIFIED`
+- `priority`: `P2`
+- `risk`: `MEDIUM`
+- `feature_ids`: `FEAT-002`, `FEAT-036`
+- `reported_at`: `2026-06-13`
+- `reported_by`: usuário, ao retornar ao app após expiração da sessão.
+- `environment`: desenvolvimento local, frontend React + backend Node.js.
+- `symptom`: com a sessão persistida no `localStorage` expirada, o app exibia "Token inválido ou expirado." num banner de erro e ficava preso, sem caminho para reautenticar.
+- `expected_behavior`: sessão expirada deve encerrar o login automaticamente e voltar à tela de autenticação.
+- `reproduction_steps`: autenticar, aguardar a expiração do JWT (cliente 24h, equipe 8h) e abrir qualquer tela que faça chamada autenticada.
+- `root_cause`: o helper `request()` apenas lançava o erro; nenhuma página tratava `401` globalmente, então o token expirado preso no `localStorage` produzia erro recorrente sem logout.
+- `resolution`: `request()` passou a detectar `401` em chamadas autenticadas (com token), limpar a sessão do `localStorage` e disparar o evento `razorfy:unauthorized`; o `App()` escuta o evento e executa `signOut()`, retornando ao login. Chamadas não autenticadas (login/registro/google) não são afetadas — `401` de credencial inválida continua exibindo a mensagem.
+- `files_changed`: `frontend/src/App.tsx`
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `verification`: backend confirmado saudável (token novo → `200`, token inválido/expirado → `401 INVALID_TOKEN`); build de produção do frontend aprovado.
+- `regression_test`: recomendado teste de fluxo simulando `401` em chamada autenticada e verificando o retorno ao login.
 - `release`: `UNRELEASED`
 
 ## 6. Registro de hotfixes

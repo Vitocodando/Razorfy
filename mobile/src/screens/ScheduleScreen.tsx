@@ -37,6 +37,7 @@ export function ScheduleScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadingTimes, setLoadingTimes] = useState(false);
   const [error, setError] = useState('');
+  const [ratings, setRatings] = useState<Record<string, { average: number; count: number }>>({});
 
   const duration = services
     .filter((service) => route.params.serviceIds.includes(service.id))
@@ -48,6 +49,19 @@ export function ScheduleScreen({ navigation, route }: Props) {
         setServices(serviceData);
         setBarbers(barberData);
         setBarberId(barberData[0]?.id ?? '');
+        // Notas médias dos barbeiros (públicas) para exibir na seleção.
+        void Promise.all(
+          barberData.map((barber) =>
+            api
+              .barberRating(barber.id)
+              .then((r) => [barber.id, r] as const)
+              .catch(() => null),
+          ),
+        ).then((entries) => {
+          const map: Record<string, { average: number; count: number }> = {};
+          for (const entry of entries) if (entry) map[entry[0]] = entry[1];
+          setRatings(map);
+        });
       })
       .catch((cause) =>
         setError(cause instanceof Error ? cause.message : 'Falha ao carregar agenda.'),
@@ -125,7 +139,16 @@ export function ScheduleScreen({ navigation, route }: Props) {
               <Text style={[styles.barberName, selected && styles.barberNameSelected]}>
                 {barber.name}
               </Text>
-              <Text style={styles.barberRole}>Barbeiro</Text>
+              {ratings[barber.id] && ratings[barber.id].count > 0 ? (
+                <View style={styles.barberRating}>
+                  <Ionicons name="star" size={11} color="#f5b301" />
+                  <Text style={styles.barberRatingText}>
+                    {ratings[barber.id].average.toFixed(1)} ({ratings[barber.id].count})
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.barberRole}>Barbeiro</Text>
+              )}
             </Pressable>
           );
         })}
@@ -305,6 +328,17 @@ const styles = StyleSheet.create({
     fontFamily: fonts.regular,
     fontSize: 9,
     marginTop: 3,
+  },
+  barberRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 3,
+  },
+  barberRatingText: {
+    color: colors.muted,
+    fontFamily: fonts.semibold,
+    fontSize: 9,
   },
   dayCard: {
     width: 68,

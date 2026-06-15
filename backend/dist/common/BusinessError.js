@@ -4,10 +4,12 @@ exports.BusinessError = void 0;
 class BusinessError extends Error {
     code;
     statusCode;
-    constructor(code, message, statusCode) {
+    details;
+    constructor(code, message, statusCode, details) {
         super(message);
         this.code = code;
         this.statusCode = statusCode;
+        this.details = details;
         this.name = 'BusinessError';
     }
 }

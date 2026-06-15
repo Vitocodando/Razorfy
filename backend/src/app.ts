@@ -23,6 +23,9 @@ import { walletRouter } from './cashback/wallet.router';
 import { paymentRouter } from './payment/payment.router';
 import { reportRouter } from './report/report.router';
 import { jobsRouter } from './jobs/jobs.router';
+import { reviewRouter } from './review/review.router';
+import { goalRouter } from './goal/goal.router';
+import { crmRouter } from './crm/crm.router';
 
 export function createApp() {
   const app = express();
@@ -39,6 +42,9 @@ export function createApp() {
   app.use('/api/v1', walletRouter);
   app.use('/api/payments', paymentRouter);
   app.use('/api/v1', reportRouter);
+  app.use('/api/v1', reviewRouter);
+  app.use('/api/v1', goalRouter);
+  app.use('/api/v1', crmRouter);
   app.use('/api/internal/jobs', jobsRouter);
 
   app.use(errorHandler);

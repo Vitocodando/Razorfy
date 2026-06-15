@@ -40,6 +40,7 @@ exports.concludeAppointment = concludeAppointment;
 exports.expirePaymentHold = expirePaymentHold;
 exports.listClientAppointments = listClientAppointments;
 exports.listBarberAppointments = listBarberAppointments;
+exports.callClient = callClient;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../prisma");
 const config_1 = require("../config");
@@ -121,6 +122,12 @@ async function createAppointment(clientId, body) {
         });
         if (overlapping.length > 0) {
             throw new BusinessError_1.BusinessError('SLOT_ALREADY_BOOKED', 'O horário selecionado acabou de ser reservado. Por favor, escolha outra opção.', 409);
+        }
+        const blocking = await tx.scheduleBlock.findFirst({
+            where: { barberId: barber.id, startTimestamp: { lt: end }, endTimestamp: { gt: start } },
+        });
+        if (blocking) {
+            throw new BusinessError_1.BusinessError('SLOT_BLOCKED', 'O horário selecionado está bloqueado pelo profissional.', 409);
         }
         const online = body.paymentMethod !== 'PRESENTIAL';
         const initialStatus = online ? 'PENDING_PAYMENT' : 'CONFIRMED';
@@ -312,6 +319,28 @@ async function listBarberAppointments(barberId) {
         },
         orderBy: { startTimestamp: 'desc' },
     });
+}
+// RF06: barbeiro aciona "Sua vez chegou" — enfileira push isolado para o cliente.
+async function callClient(appointmentId, actorId, actorRole) {
+    const appt = await prisma_1.prisma.appointment.findUnique({
+        where: { id: appointmentId },
+        include: { barber: { select: { id: true, name: true } } },
+    });
+    if (!appt)
+        throw new BusinessError_1.BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
+    const isAdmin = actorRole === 'ADMIN' || actorRole === 'DEV';
+    if (!isAdmin && appt.barberId !== actorId) {
+        throw new BusinessError_1.BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
+    }
+    if (appt.status !== 'CONFIRMED') {
+        throw new BusinessError_1.BusinessError('INVALID_APPOINTMENT_STATE', 'Só é possível chamar clientes de atendimentos confirmados.', 422);
+    }
+    await notifSvc.barberCall(prisma_1.prisma, {
+        clientId: appt.clientId,
+        appointmentId: appt.id,
+        barberName: appt.barber.name,
+    });
+    return { ok: true };
 }
 async function expireHoldInTx(tx, appt) {
     const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);

@@ -1,0 +1,78 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ALLOWED_BLOCK_DURATIONS = void 0;
+exports.createExpressBlock = createExpressBlock;
+exports.listBlocksForDate = listBlocksForDate;
+exports.deleteExpressBlock = deleteExpressBlock;
+const prisma_1 = require("../prisma");
+const BusinessError_1 = require("../common/BusinessError");
+const BLOCKING_STATUSES = ['PENDING_PAYMENT', 'CONFIRMED'];
+exports.ALLOWED_BLOCK_DURATIONS = [15, 30, 60];
+// RN04: cria um bloqueio a partir de agora; nega se houver interseção temporal com
+// agendamentos ativos ou com outros bloqueios. Lock pessimista do barbeiro (mesmo
+// padrão de appointment.service.createAppointment) evita corrida com novos bookings.
+async function createExpressBlock(barberId, durationMinutes, reason) {
+    const start = new Date();
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    return prisma_1.prisma.$transaction(async (tx) => {
+        const barberRows = await tx.$queryRaw `
+      SELECT id, role FROM users WHERE id = ${barberId}::uuid FOR UPDATE
+    `;
+        if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
+            throw new BusinessError_1.BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+        }
+        const conflictAppt = await tx.appointment.findFirst({
+            where: {
+                barberId,
+                status: { in: BLOCKING_STATUSES },
+                startTimestamp: { lt: end },
+                endTimestamp: { gt: start },
+            },
+            orderBy: { startTimestamp: 'asc' },
+            select: { id: true, startTimestamp: true },
+        });
+        if (conflictAppt) {
+            // Log estruturado da recusa (auditoria/usabilidade — NFR de observabilidade).
+            console.log(JSON.stringify({
+                event: 'express_block_rejected', reason: 'appointment_collision',
+                barberId, requestedStart: start.toISOString(), requestedEnd: end.toISOString(),
+                collidingAppointmentId: conflictAppt.id, collidingStartTime: conflictAppt.startTimestamp.toISOString(),
+            }));
+            throw new BusinessError_1.BusinessError('BLOCK_COLLISION', 'Você possui um cliente agendado neste intervalo de tempo.', 409, {
+                conflictDetails: {
+                    collidingAppointmentId: conflictAppt.id,
+                    collidingStartTime: conflictAppt.startTimestamp.toISOString(),
+                },
+            });
+        }
+        const conflictBlock = await tx.scheduleBlock.findFirst({
+            where: { barberId, startTimestamp: { lt: end }, endTimestamp: { gt: start } },
+            orderBy: { startTimestamp: 'asc' },
+            select: { id: true, startTimestamp: true },
+        });
+        if (conflictBlock) {
+            throw new BusinessError_1.BusinessError('BLOCK_COLLISION', 'Você já possui um bloqueio neste intervalo de tempo.', 409, {
+                conflictDetails: {
+                    collidingBlockId: conflictBlock.id,
+                    collidingStartTime: conflictBlock.startTimestamp.toISOString(),
+                },
+            });
+        }
+        return tx.scheduleBlock.create({
+            data: { barberId, startTimestamp: start, endTimestamp: end, reason: reason ?? null },
+        });
+    });
+}
+async function listBlocksForDate(barberId, dayStartUtc, dayEndUtc) {
+    return prisma_1.prisma.scheduleBlock.findMany({
+        where: { barberId, startTimestamp: { lt: dayEndUtc }, endTimestamp: { gt: dayStartUtc } },
+        orderBy: { startTimestamp: 'asc' },
+    });
+}
+async function deleteExpressBlock(barberId, blockId) {
+    const block = await prisma_1.prisma.scheduleBlock.findUnique({ where: { id: blockId } });
+    if (!block || block.barberId !== barberId) {
+        throw new BusinessError_1.BusinessError('BLOCK_NOT_FOUND', 'Bloqueio não encontrado.', 404);
+    }
+    await prisma_1.prisma.scheduleBlock.delete({ where: { id: blockId } });
+}

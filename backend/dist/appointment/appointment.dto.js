@@ -11,6 +11,7 @@ function toAppointmentDto(appt, paymentPayload = null) {
         startTimestamp: appt.startTimestamp,
         endTimestamp: appt.endTimestamp,
         barberName: appt.barber.name,
+        clientId: appt.client?.id,
         clientName: appt.client?.name,
         services: appt.services.map(s => ({
             name: s.serviceName,

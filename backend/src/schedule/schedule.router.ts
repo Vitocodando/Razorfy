@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { availableStarts } from './availability.service';
+import { availableStarts, localDayRangeUtc } from './availability.service';
+import { createExpressBlock, listBlocksForDate, deleteExpressBlock } from './block.service';
 import { asyncHandler } from '../common/asyncHandler';
 import { BusinessError } from '../common/BusinessError';
 import { authenticate } from '../middleware/authenticate';
@@ -124,4 +125,60 @@ scheduleRouter.put('/barbers/:id/slots', authenticate, asyncHandler(async (req, 
   ]);
 
   res.json({ ok: true });
+}));
+
+// ---------- Bloqueio Express (RF01 / RN04 / V01) ----------
+
+const ExpressBlockSchema = z.object({
+  durationMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)], {
+    errorMap: () => ({ message: 'Duração de bloqueio inválida. Utilize 15, 30 ou 60 minutos.' }),
+  }),
+  reason: z.string().max(255).optional(),
+});
+
+// POST /barbers/:id/express-blocks
+scheduleRouter.post('/barbers/:id/express-blocks', authenticate, asyncHandler(async (req, res) => {
+  const user = req.user!;
+  assertSlotAccess(user.role, user.id, req.params.id);
+
+  const parsed = ExpressBlockSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw new BusinessError('INVALID_BLOCK_DURATION', 'Duração de bloqueio inválida. Utilize 15, 30 ou 60 minutos.', 400);
+  }
+
+  const block = await createExpressBlock(req.params.id, parsed.data.durationMinutes, parsed.data.reason);
+  res.status(201).json({
+    blockId: block.id,
+    barberId: block.barberId,
+    startTimestamp: block.startTimestamp,
+    endTimestamp: block.endTimestamp,
+    reason: block.reason,
+  });
+}));
+
+// GET /barbers/:id/express-blocks?date=YYYY-MM-DD
+scheduleRouter.get('/barbers/:id/express-blocks', authenticate, asyncHandler(async (req, res) => {
+  const user = req.user!;
+  assertSlotAccess(user.role, user.id, req.params.id);
+
+  const date = req.query.date;
+  if (!date || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new BusinessError('INVALID_INPUT', 'O parâmetro date é obrigatório (YYYY-MM-DD).', 400);
+  }
+  const { dayStartUtc, dayEndUtc } = localDayRangeUtc(date);
+  const blocks = await listBlocksForDate(req.params.id, dayStartUtc, dayEndUtc);
+  res.json(blocks.map(b => ({
+    blockId: b.id,
+    startTimestamp: b.startTimestamp,
+    endTimestamp: b.endTimestamp,
+    reason: b.reason,
+  })));
+}));
+
+// DELETE /barbers/:id/express-blocks/:blockId
+scheduleRouter.delete('/barbers/:id/express-blocks/:blockId', authenticate, asyncHandler(async (req, res) => {
+  const user = req.user!;
+  assertSlotAccess(user.role, user.id, req.params.id);
+  await deleteExpressBlock(req.params.id, req.params.blockId);
+  res.status(204).end();
 }));

@@ -22,6 +22,12 @@ model User {
   barberAppointments           Appointment[]              @relation("BarberAppointments")
   cashbackWallet               CashbackWallet?
   appointmentStatusHistoryActs AppointmentStatusHistory[]
+  scheduleBlocks               ScheduleBlock[]
+  reviewsAsBarber              Review[]                   @relation("BarberReviews")
+  reviewsAsClient              Review[]                   @relation("ClientReviews")
+  barberGoals                  BarberGoal[]
+  clientNotes                  ClientNote[]               @relation("ClientNotes")
+  authoredNotes                ClientNote[]               @relation("AuthoredNotes")
 
   @@map("users")
 }
@@ -78,6 +84,7 @@ model Appointment {
   statusHistory        AppointmentStatusHistory[]
   cashbackTransactions CashbackTransaction[]
   notificationOutbox   NotificationOutbox[]
+  review               Review?
 
   @@map("appointments")
 }
@@ -157,4 +164,66 @@ model NotificationOutbox {
   appointment Appointment? @relation(fields: [appointmentId], references: [id])
 
   @@map("notification_outbox")
+}
+
+// ----- Módulo Barbeiro & CRM (Fatia 1) -----
+
+model ScheduleBlock {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  barberId       String   @map("barber_id") @db.Uuid
+  startTimestamp DateTime @map("start_timestamp") @db.Timestamptz
+  endTimestamp   DateTime @map("end_timestamp") @db.Timestamptz
+  reason         String?  @db.VarChar(255)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  barber User @relation(fields: [barberId], references: [id])
+
+  @@index([barberId, startTimestamp])
+  @@map("schedule_blocks")
+}
+
+model Review {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  appointmentId String   @unique @map("appointment_id") @db.Uuid
+  barberId      String   @map("barber_id") @db.Uuid
+  clientId      String   @map("client_id") @db.Uuid
+  rating        Int
+  comment       String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id])
+  barber      User        @relation("BarberReviews", fields: [barberId], references: [id])
+  client      User        @relation("ClientReviews", fields: [clientId], references: [id])
+
+  @@index([barberId])
+  @@map("reviews")
+}
+
+model BarberGoal {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  barberId           String   @map("barber_id") @db.Uuid
+  periodStart        DateTime @map("period_start") @db.Date
+  periodEnd          DateTime @map("period_end") @db.Date
+  targetAppointments Int      @map("target_appointments")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  barber User @relation(fields: [barberId], references: [id])
+
+  @@index([barberId])
+  @@map("barber_goals")
+}
+
+model ClientNote {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  clientId  String   @map("client_id") @db.Uuid
+  authorId  String   @map("author_id") @db.Uuid
+  noteText  String   @map("note_text") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  client User @relation("ClientNotes", fields: [clientId], references: [id])
+  author User @relation("AuthoredNotes", fields: [authorId], references: [id])
+
+  @@index([clientId])
+  @@map("client_notes")
 }

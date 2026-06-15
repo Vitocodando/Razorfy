@@ -4,10 +4,12 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
+  Modal,
   Pressable,
   RefreshControl,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import {
@@ -45,6 +47,40 @@ export function AppointmentListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [reviewTarget, setReviewTarget] = useState<Appointment | null>(null);
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+  const [reviewedIds, setReviewedIds] = useState<string[]>([]);
+
+  function openReview(appointment: Appointment) {
+    setReviewTarget(appointment);
+    setRating(5);
+    setComment('');
+    setReviewError('');
+  }
+
+  async function submitReview() {
+    if (!session || !reviewTarget) return;
+    setSubmittingReview(true);
+    setReviewError('');
+    try {
+      await api.createReview(session.accessToken, {
+        appointmentId: reviewTarget.appointmentId,
+        rating,
+        comment: comment.trim() || undefined,
+      });
+      setReviewedIds((prev) => [...prev, reviewTarget.appointmentId]);
+      setReviewTarget(null);
+    } catch (cause) {
+      setReviewError(
+        cause instanceof Error ? cause.message : 'Não foi possível enviar a avaliação.',
+      );
+    } finally {
+      setSubmittingReview(false);
+    }
+  }
 
   const load = useCallback(async (refresh = false) => {
     if (!session) return;
@@ -190,10 +226,62 @@ export function AppointmentListScreen() {
               key={appointment.appointmentId}
               appointment={appointment}
               onCancel={() => requestCancellation(appointment)}
+              reviewed={reviewedIds.includes(appointment.appointmentId)}
+              onReview={() => openReview(appointment)}
             />
           ))}
         </View>
       )}
+
+      <Modal
+        visible={reviewTarget !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setReviewTarget(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setReviewTarget(null)}>
+          <Pressable style={styles.modalSheet} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.modalTitle}>Avaliar atendimento</Text>
+            <Text style={styles.modalSubtitle}>
+              {reviewTarget?.barberName} ·{' '}
+              {reviewTarget?.services.map((s) => s.name).join(' + ')}
+            </Text>
+
+            <View style={styles.stars}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable key={value} onPress={() => setRating(value)} hitSlop={6}>
+                  <Ionicons
+                    name={value <= rating ? 'star' : 'star-outline'}
+                    size={36}
+                    color={value <= rating ? '#f5b301' : colors.muted}
+                  />
+                </Pressable>
+              ))}
+            </View>
+
+            <TextInput
+              value={comment}
+              onChangeText={setComment}
+              placeholder="Conte como foi (opcional)"
+              placeholderTextColor={colors.muted}
+              multiline
+              style={styles.commentInput}
+            />
+
+            <ErrorMessage message={reviewError} />
+
+            <PrimaryButton
+              label={submittingReview ? 'Enviando...' : 'Enviar avaliação'}
+              icon="send"
+              onPress={() => void submitReview()}
+              disabled={submittingReview}
+            />
+            <Pressable style={styles.modalCancel} onPress={() => setReviewTarget(null)}>
+              <Text style={styles.modalCancelText}>Agora não</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -222,14 +310,19 @@ function FilterButton({
 function AppointmentCard({
   appointment,
   onCancel,
+  reviewed,
+  onReview,
 }: {
   appointment: Appointment;
   onCancel: () => void;
+  reviewed: boolean;
+  onReview: () => void;
 }) {
   const start = new Date(appointment.startTimestamp);
   const end = new Date(appointment.endTimestamp);
   const canCancel = appointment.status === 'CONFIRMED';
   const pending = appointment.status === 'PENDING_PAYMENT';
+  const canReview = appointment.status === 'CONCLUDED' && !reviewed;
 
   return (
     <Card>
@@ -291,6 +384,20 @@ function AppointmentCard({
           <Ionicons name="close-circle-outline" size={17} color={colors.red} />
           <Text style={styles.cancelText}>Cancelar horário</Text>
         </Pressable>
+      ) : null}
+
+      {canReview ? (
+        <Pressable style={styles.reviewButton} onPress={onReview}>
+          <Ionicons name="star-outline" size={17} color={colors.blue} />
+          <Text style={styles.reviewText}>Avaliar atendimento</Text>
+        </Pressable>
+      ) : null}
+
+      {appointment.status === 'CONCLUDED' && reviewed ? (
+        <View style={styles.reviewedRow}>
+          <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+          <Text style={styles.reviewedText}>Avaliação enviada</Text>
+        </View>
       ) : null}
     </Card>
   );
@@ -424,5 +531,80 @@ const styles = StyleSheet.create({
     color: colors.red,
     fontFamily: fonts.semibold,
     fontSize: 10,
+  },
+  reviewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingTop: 14,
+  },
+  reviewText: {
+    color: colors.blue,
+    fontFamily: fonts.semibold,
+    fontSize: 10,
+  },
+  reviewedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingTop: 14,
+  },
+  reviewedText: {
+    color: colors.success,
+    fontFamily: fonts.semibold,
+    fontSize: 10,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: colors.cream,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 22,
+    paddingBottom: 32,
+    gap: 14,
+  },
+  modalTitle: {
+    color: colors.ink,
+    fontFamily: fonts.extraBold,
+    fontSize: 20,
+  },
+  modalSubtitle: {
+    color: colors.muted,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    marginTop: -8,
+  },
+  stars: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 6,
+  },
+  commentInput: {
+    minHeight: 80,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.paper,
+    padding: 13,
+    color: colors.ink,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    textAlignVertical: 'top',
+  },
+  modalCancel: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  modalCancelText: {
+    color: colors.muted,
+    fontFamily: fonts.semibold,
+    fontSize: 12,
   },
 });

@@ -30,3 +30,22 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     res.status(401).json({ timestamp: new Date().toISOString(), status: 401, code: 'INVALID_TOKEN', message: 'Token inválido ou expirado.', path: req.path });
   }
 }
+
+// Popula req.user quando há token válido, mas não exige autenticação.
+// Usado em endpoints públicos cujo retorno varia conforme a role (ex.: avaliações).
+export function optionalAuthenticate(req: Request, _res: Response, next: NextFunction): void {
+  const header = req.headers.authorization;
+  if (header?.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(header.slice(7), config.JWT_SECRET, { algorithms: ['HS256'] }) as {
+        sub: string;
+        roles: string[];
+        name: string;
+      };
+      req.user = { id: payload.sub, role: payload.roles[0] as AuthUser['role'], name: payload.name };
+    } catch {
+      // token inválido em rota pública: segue como anônimo
+    }
+  }
+  next();
+}

@@ -10,6 +10,7 @@ import {
   concludeAppointment,
   listClientAppointments,
   listBarberAppointments,
+  callClient,
 } from './appointment.service';
 
 export const appointmentRouter = Router();
@@ -52,5 +53,16 @@ appointmentRouter.post(
   asyncHandler(async (req, res) => {
     const updated = await concludeAppointment(req.params.id, req.user!.id);
     res.json(toAppointmentDto(updated));
+  }),
+);
+
+// RF06: chamar o cliente do atendimento (push "Sua vez chegou").
+appointmentRouter.post(
+  '/:id/call-client',
+  authenticate,
+  requireRole('BARBER', 'ADMIN', 'DEV'),
+  asyncHandler(async (req, res) => {
+    const result = await callClient(req.params.id, req.user!.id, req.user!.role);
+    res.json(result);
   }),
 );

@@ -29,3 +29,8 @@ exports.appointmentRouter.post('/:id/conclude', authenticate_1.authenticate, (0,
     const updated = await (0, appointment_service_1.concludeAppointment)(req.params.id, req.user.id);
     res.json((0, appointment_dto_1.toAppointmentDto)(updated));
 }));
+// RF06: chamar o cliente do atendimento (push "Sua vez chegou").
+exports.appointmentRouter.post('/:id/call-client', authenticate_1.authenticate, (0, requireRole_1.requireRole)('BARBER', 'ADMIN', 'DEV'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const result = await (0, appointment_service_1.callClient)(req.params.id, req.user.id, req.user.role);
+    res.json(result);
+}));

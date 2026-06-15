@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.availableStarts = availableStarts;
+exports.localDayRangeUtc = localDayRangeUtc;
 exports.assertWorkingTime = assertWorkingTime;
 const prisma_1 = require("../prisma");
 const config_1 = require("../config");
@@ -106,6 +107,10 @@ async function availableStarts(barberId, date, durationMinutes) {
             endTimestamp: { gt: dayStartUtc },
         },
     });
+    // Bloqueios express também removem horários da grade.
+    const blocks = await prisma_1.prisma.scheduleBlock.findMany({
+        where: { barberId, startTimestamp: { lt: dayEndUtc }, endTimestamp: { gt: dayStartUtc } },
+    });
     const now = new Date();
     const results = [];
     for (let cursor = window.startMinutes; cursor < window.endMinutes; cursor += GRID_MINUTES) {
@@ -118,16 +123,23 @@ async function availableStarts(barberId, date, durationMinutes) {
             continue;
         if (startUtc <= now)
             continue;
-        const blocked = booked.some(appt => {
+        const blockedByAppt = booked.some(appt => {
             if (appt.status === 'PENDING_PAYMENT' && appt.holdExpiresAt && appt.holdExpiresAt <= now) {
                 return false;
             }
             return startUtc < appt.endTimestamp && endUtc > appt.startTimestamp;
         });
-        if (!blocked)
+        const blockedByBlock = blocks.some(b => startUtc < b.endTimestamp && endUtc > b.startTimestamp);
+        if (!blockedByAppt && !blockedByBlock)
             results.push(startUtc);
     }
     return results;
+}
+// Janela UTC [início, fim) do dia local (BUSINESS_TIMEZONE). Reutilizado pela listagem de bloqueios.
+function localDayRangeUtc(date) {
+    const tz = config_1.config.BUSINESS_TIMEZONE;
+    const dayStartUtc = new Date(getUtcFromLocal(date, '00', '00', tz));
+    return { dayStartUtc, dayEndUtc: new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000) };
 }
 async function assertWorkingTime(barberId, start, end) {
     const tz = config_1.config.BUSINESS_TIMEZONE;

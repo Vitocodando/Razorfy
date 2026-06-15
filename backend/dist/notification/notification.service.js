@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.appointmentEvent = appointmentEvent;
+exports.barberCall = barberCall;
 exports.scheduleReminder = scheduleReminder;
 async function appointmentEvent(tx, appt, eventType) {
     const payload = {
@@ -19,6 +20,25 @@ async function appointmentEvent(tx, appt, eventType) {
         rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType, payload, nextAttemptAt: now });
     }
     await tx.notificationOutbox.createMany({ data: rows });
+}
+// RF06: push isolado "Sua vez chegou" para o cliente do próximo atendimento.
+async function barberCall(tx, data) {
+    const payload = {
+        appointmentId: data.appointmentId,
+        barberName: data.barberName,
+        title: 'Sua vez chegou!',
+        body: `${data.barberName} está pronto para te atender. Dirija-se à cadeira.`,
+    };
+    await tx.notificationOutbox.create({
+        data: {
+            appointmentId: data.appointmentId,
+            channel: 'PUSH',
+            destination: data.clientId,
+            eventType: 'BARBER_CALL',
+            payload,
+            nextAttemptAt: new Date(),
+        },
+    });
 }
 async function scheduleReminder(tx, appt) {
     const remindAt = new Date(appt.startTimestamp.getTime() - 2 * 60 * 60 * 1000);

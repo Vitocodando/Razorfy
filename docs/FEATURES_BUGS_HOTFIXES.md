@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-13T14:05:00
+last_updated: 2026-06-15T16:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -105,6 +105,12 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | Pagamento presencial | `IMPLEMENTED` |
 | Cashback e extrato | `IMPLEMENTED` |
 | Cancelamento e janela mínima | `IMPLEMENTED` |
+| Bloqueio express da agenda | `IMPLEMENTED` |
+| Avaliações com privacidade | `IMPLEMENTED` |
+| Metas de performance | `IMPLEMENTED` |
+| Notas CRM por cliente | `IMPLEMENTED` |
+| Chamar cliente (push) | `IMPLEMENTED` |
+| Lista de espera / Timeline / Recorrência | `PLANNED` |
 | Estorno em gateway real | `PARTIAL`, atualmente simulado |
 | Push | `PARTIAL`, processado localmente |
 | WhatsApp | `PARTIAL`, integração REST configurável |
@@ -744,6 +750,124 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
+### FEAT-059 - Bloqueio Express da agenda
+
+- `status`: `IMPLEMENTED`
+- `area`: `SCHEDULE`
+- `actors`: `BARBER`, `ADMIN`
+- `description`: Barbeiro bloqueia a própria agenda a partir de agora por 15, 30 ou 60 minutos (pausa rápida). O bloqueio remove horários da disponibilidade e impede novos agendamentos no intervalo.
+- `business_rules`: **RN04** — `start = agora`, `end = agora + duração`; recusa se houver interseção com `appointments` `CONFIRMED`/`PENDING_PAYMENT` ou outro bloqueio (lock pessimista do barbeiro). **V01** — duração ∈ {15,30,60}, senão `400 INVALID_BLOCK_DURATION`. Conflito → `409 BLOCK_COLLISION` com `conflictDetails`. Recusa gera log JSON estruturado.
+- `api`: `POST/GET /api/v1/barbers/{id}/express-blocks`, `DELETE .../{blockId}`. Integrado em `GET /barbers/{id}/availability` e `POST /appointments` (novo erro `SLOT_BLOCKED`).
+- `frontend`: web `BarberAgendaPage` (botão "Bloquear agenda" 15/30/60 + chips de bloqueios ativos com remoção).
+- `database_changes`: `0004_barber_crm` — tabela `schedule_blocks`.
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-008`, `FEAT-010`, `FEAT-054`
+- `acceptance`: 30min → 201; conflito → 409 com horário do cliente; 45min → 400; disponibilidade e booking respeitam o bloqueio.
+- `tests`: smoke HTTP (201/409/400, GET lista, DELETE 204); `tsc` backend e build web aprovados.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-060 - Avaliações com privacidade de comentário
+
+- `status`: `IMPLEMENTED`
+- `area`: `REVIEW`
+- `actors`: `CLIENT`, `BARBER`, `ADMIN`
+- `description`: Cliente avalia (nota 1–5 + comentário opcional) um atendimento `CONCLUDED` próprio. Nota média e contagem são públicas; o comentário é restrito.
+- `business_rules`: **V02** — 1 avaliação por `appointment_id` (UNIQUE) → `409 REVIEW_ALREADY_EXISTS`. `barberId`/`clientId` derivados do agendamento (não confia no corpo). **RN02/V03** — `average`/`count` públicos; `comment` revelado apenas ao barbeiro avaliado ou ADMIN/DEV; para CLIENT/anônimo vira `"***"`. Média 2 casas (ex.: 5,4,4 → 4.33).
+- `api`: `POST /api/v1/reviews` (CLIENT), `GET /api/v1/reviews?barberId=` (público, role-aware via `optionalAuthenticate`), `GET /api/v1/barbers/{id}/rating` (público).
+- `frontend`: web `BarberAgendaPage` (card de avaliações com média + comentários); mobile `AppointmentListScreen` (modal de avaliar com estrelas) + nota do barbeiro em `ScheduleScreen`.
+- `database_changes`: `0004_barber_crm` — tabela `reviews`.
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-024`, `FEAT-048`, `FEAT-054`
+- `acceptance`: avaliar concluído → 201; reavaliar → 409; GET como CLIENT/anônimo/barbeiro-não-dono → `comment:"***"`; dono/ADMIN → comentário real.
+- `tests`: smoke HTTP completo (201/409 + mascaramento nas 4 roles, média 5); builds aprovados.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-061 - Metas de performance do barbeiro
+
+- `status`: `IMPLEMENTED`
+- `area`: `REPORT`
+- `actors`: `BARBER`, `ADMIN`
+- `description`: Admin define metas de atendimentos por período; barbeiro acompanha o progresso (concluídos vs alvo).
+- `business_rules`: **RN03** — leitura (GET) pelo barbeiro próprio/ADMIN; mutação (POST/PUT/DELETE) restrita a ADMIN/DEV (`403` para barbeiro). `period_end >= period_start`, `target > 0`. `completed` = atendimentos `CONCLUDED` no período; `progressPct` limitado a 100.
+- `api`: `GET /api/v1/barbers/{id}/goals`; `POST/PUT/DELETE /api/v1/barber-goals[/:id]` (ADMIN/DEV).
+- `frontend`: web `BarberAgendaPage` (card "Meta do período" com barra de progresso). Mutação admin via API (não há console admin — FEAT-032 `PLANNED`).
+- `database_changes`: `0004_barber_crm` — tabela `barber_goals`.
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-024`, `FEAT-003`
+- `acceptance`: ADMIN cria meta; barbeiro vê `completed/progressPct`; barbeiro tentando mutar → 403.
+- `tests`: smoke HTTP (201 admin, GET completed:2/progress 20%, 403 barbeiro); builds aprovados.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-062 - Prancheta de notas CRM por cliente
+
+- `status`: `IMPLEMENTED`
+- `area`: `CRM`
+- `actors`: `BARBER`, `ADMIN`
+- `description`: Notas em texto livre atreladas ao cliente, identificando o autor. Auxilia padronização do atendimento.
+- `business_rules`: **RN05** — qualquer barbeiro/staff lê o histórico do cliente; cada nota mostra `authorName`. Criar exige `note_text` não-vazio e cliente válido. Editar/excluir apenas pelo autor ou ADMIN/DEV. Clientes não acessam o CRM.
+- `api`: `POST/GET /api/v1/clients/{clientId}/notes`, `PUT/DELETE .../{noteId}` (todas staff-only).
+- `frontend`: web `BarberAgendaPage` (botão "Notas" no card → modal `ClientNotesModal`). Requer `clientId` no DTO de agendamento (adicionado, presente só na view do barbeiro).
+- `database_changes`: `0004_barber_crm` — tabela `client_notes`.
+- `api_compatibility`: `COMPATIBLE` (DTO de agendamento ganhou `clientId` opcional)
+- `depends_on`: `FEAT-054`
+- `acceptance`: barbeiro cria/lista/edita nota; outro barbeiro lê (RN05); não-autor editando → 403.
+- `tests`: smoke HTTP (201 + leitura cruzada com authorName); builds aprovados.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-063 - Chamar cliente (push "Sua vez chegou")
+
+- `status`: `IMPLEMENTED`
+- `area`: `NOTIFICATION`
+- `actors`: `BARBER`, `ADMIN`
+- `description`: Barbeiro aciona uma notificação push isolada para o cliente do atendimento confirmado.
+- `business_rules`: **RF06** — barbeiro só chama o próprio atendimento; status deve ser `CONFIRMED`. Enfileira 1 linha em `notification_outbox` (canal `PUSH`, `eventType: BARBER_CALL`, `destination = clientId`) processada pelo outbox existente (push simulado — FCM real é follow-up de infra).
+- `api`: `POST /api/v1/appointments/{id}/call-client` (BARBER/ADMIN/DEV).
+- `frontend`: web `BarberAgendaPage` (botão "Chamar" no card confirmado).
+- `database_changes`: `NONE` (reusa `notification_outbox`).
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-026`, `FEAT-054`
+- `acceptance`: `POST call-client` → 200 e nova linha `BARBER_CALL` na outbox.
+- `tests`: smoke HTTP (200 + contagem de outbox); builds aprovados.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-064 - Lista de Espera com broadcast (First-to-Checkout)
+
+- `status`: `PLANNED`
+- `area`: `APPOINTMENT`
+- `actors`: `CLIENT`, `BARBER`, `SYSTEM`, `PUSH_GATEWAY`
+- `description`: Inscrição em lista de espera por barbeiro/dia; ao liberar um horário (cancelamento), broadcast de push para inscritos com alocação *First-to-Checkout* (lock de 10 min ao primeiro a iniciar checkout).
+- `business_rules`: RN01 (sem ordem; primeiro a fazer checkout leva), V04 (1 inscrição por cliente/barbeiro/data, duplicata ignorada), tratamento de corrida sem dupla reserva.
+- `requirements`: tabela `waitlist_entries`, controle de concorrência (`SELECT FOR UPDATE SKIP LOCKED`), despacho assíncrono (fila Redis/broker), push real (FCM).
+- `depends_on`: `FEAT-023`, `FEAT-026`
+- `risk`: `HIGH`
+- `target_release`: `UNPLANNED` (Fatia 2)
+
+### FEAT-065 - Timeline "Modo Cadeira" (tempo real)
+
+- `status`: `PLANNED`
+- `area`: `SCHEDULE`
+- `actors`: `BARBER`
+- `description`: Dashboard em tempo real do atendimento atual (cronômetro, status do próximo cliente), idealmente via SSE/WebSocket. CT02: cronômetro não fica negativo; após estourar a duração muda para "Em atraso".
+- `requirements`: SSE/WebSocket (evitar short-polling), possível `barber_stats` consolidado.
+- `depends_on`: `FEAT-054`
+- `risk`: `MEDIUM`
+- `target_release`: `UNPLANNED` (Fatia 2)
+
+### FEAT-066 - Motor de Recorrência
+
+- `status`: `PLANNED`
+- `area`: `APPOINTMENT`
+- `actors`: `CLIENT`, `BARBER`
+- `description`: Na conclusão do atendimento, sugere pré-agendamento futuro recorrente.
+- `depends_on`: `FEAT-024`
+- `risk`: `LOW`
+- `target_release`: `UNPLANNED` (Fatia 2)
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -756,6 +880,11 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-006` | Agendamento deve respeitar jornada e almoço | `FEAT-007`, `FEAT-008`, `FEAT-010` |
 | `RN-007` | Cashback reservado não pode ser gasto em outra compra | `FEAT-018`, `FEAT-019` |
 | `RN-008` | Pagamento pendente bloqueia o horário por 10 minutos | `FEAT-011` |
+| `RN-009` | Bloqueio express negado se houver interseção com agendamento/bloqueio ativo | `FEAT-059` |
+| `RN-010` | Comentário de avaliação é restrito ao barbeiro avaliado e admin; nota é pública | `FEAT-060` |
+| `RN-011` | Apenas ADMIN/DEV mutam metas; barbeiro tem leitura | `FEAT-061` |
+| `RN-012` | Qualquer barbeiro lê o histórico de notas do cliente; só o autor/admin edita | `FEAT-062` |
+| `RN-013` | Uma avaliação por agendamento concluído | `FEAT-060` |
 
 ## 5. Registro de bugs
 

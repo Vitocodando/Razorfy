@@ -115,6 +115,11 @@ export async function availableStarts(barberId: string, date: string, durationMi
     },
   });
 
+  // Bloqueios express também removem horários da grade.
+  const blocks = await prisma.scheduleBlock.findMany({
+    where: { barberId, startTimestamp: { lt: dayEndUtc }, endTimestamp: { gt: dayStartUtc } },
+  });
+
   const now = new Date();
   const results: Date[] = [];
 
@@ -129,17 +134,25 @@ export async function availableStarts(barberId: string, date: string, durationMi
     if (!fits(window, startLocalMin, endLocalMin, startUtc, endUtc)) continue;
     if (startUtc <= now) continue;
 
-    const blocked = booked.some(appt => {
+    const blockedByAppt = booked.some(appt => {
       if (appt.status === 'PENDING_PAYMENT' && appt.holdExpiresAt && appt.holdExpiresAt <= now) {
         return false;
       }
       return startUtc < appt.endTimestamp && endUtc > appt.startTimestamp;
     });
+    const blockedByBlock = blocks.some(b => startUtc < b.endTimestamp && endUtc > b.startTimestamp);
 
-    if (!blocked) results.push(startUtc);
+    if (!blockedByAppt && !blockedByBlock) results.push(startUtc);
   }
 
   return results;
+}
+
+// Janela UTC [início, fim) do dia local (BUSINESS_TIMEZONE). Reutilizado pela listagem de bloqueios.
+export function localDayRangeUtc(date: string): { dayStartUtc: Date; dayEndUtc: Date } {
+  const tz = config.BUSINESS_TIMEZONE;
+  const dayStartUtc = new Date(getUtcFromLocal(date, '00', '00', tz));
+  return { dayStartUtc, dayEndUtc: new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000) };
 }
 
 export async function assertWorkingTime(barberId: string, start: Date, end: Date): Promise<void> {

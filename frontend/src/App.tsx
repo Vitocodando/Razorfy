@@ -15,11 +15,36 @@ type Appointment = {
   startTimestamp: string
   endTimestamp: string
   barberName: string
+  clientId?: string
   clientName?: string
   amountToPay: number
   totalPrice: number
   cashbackUsed: number
   services: { name: string; durationMinutes: number; price: number }[]
+}
+type ExpressBlock = {
+  blockId: string
+  startTimestamp: string
+  endTimestamp: string
+  reason: string | null
+}
+type Review = { id: string; rating: number; comment: string | null; clientName?: string; createdAt: string }
+type ReviewSummary = { average: number; count: number; reviews: Review[] }
+type BarberGoal = {
+  id: string
+  periodStart: string
+  periodEnd: string
+  targetAppointments: number
+  completed: number
+  progressPct: number
+}
+type ClientNote = {
+  id: string
+  noteText: string
+  authorId: string
+  authorName: string
+  createdAt: string
+  updatedAt: string
 }
 type Transaction = {
   id: string
@@ -99,6 +124,10 @@ function dateInputValue(date: Date) {
   return `${year}-${month}-${day}`
 }
 
+
+function today() {
+  return dateInputValue(new Date())
+}
 
 function tomorrow() {
   const date = new Date()
@@ -590,9 +619,9 @@ function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (
             )}
           </form>
           <div className="mt-8 text-center">
-            <button onClick={() => { setMode('register'); setError('') }} className="text-on-surface-variant text-[16px] hover:text-primary transition-colors">
+            <button onClick={() => { setMode('register'); setError('') }} className="text-on-surface-variant text-[16px]">
               Não tem uma conta?{' '}
-              <span className="text-[14px] font-semibold text-secondary underline decoration-2 underline-offset-4">Cadastre-se</span>
+              <span className="text-[14px] font-semibold text-secondary underline decoration-2 underline-offset-4 hover:text-primary transition-colors">Cadastre-se</span>
             </button>
           </div>
         </main>
@@ -1340,20 +1369,41 @@ function agendaRange(filter: AgendaFilter, customDate: string): { start: Date; e
 }
 
 function BarberAgendaPage({ session }: { session: Session }) {
+  const barberId = session.user.id
+  const token = session.accessToken
   const [appointments, setAppointments] = useState<Appointment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const [filter, setFilter] = useState<AgendaFilter>('hoje')
   const [customDate, setCustomDate] = useState('')
   const [statusFilter, setStatusFilter] = useState<AgendaStatus>('all')
   const [concludingId, setConcludingId] = useState<string | null>(null)
+  const [callingId, setCallingId] = useState<string | null>(null)
+
+  const [blocks, setBlocks] = useState<ExpressBlock[]>([])
+  const [goals, setGoals] = useState<BarberGoal[]>([])
+  const [reviews, setReviews] = useState<ReviewSummary | null>(null)
+  const [blockMenuOpen, setBlockMenuOpen] = useState(false)
+  const [creatingBlock, setCreatingBlock] = useState(false)
+  const [notesFor, setNotesFor] = useState<{ clientId: string; clientName: string } | null>(null)
+
+  function loadBlocks() {
+    request<ExpressBlock[]>(`/barbers/${barberId}/express-blocks?date=${today()}`, {}, token)
+      .then(setBlocks)
+      .catch(() => {})
+  }
 
   useEffect(() => {
-    request<Appointment[]>('/appointments/mine', {}, session.accessToken)
+    request<Appointment[]>('/appointments/mine', {}, token)
       .then(setAppointments)
       .catch((cause) => setError(cause.message))
       .finally(() => setLoading(false))
-  }, [session.accessToken])
+    loadBlocks()
+    request<BarberGoal[]>(`/barbers/${barberId}/goals`, {}, token).then(setGoals).catch(() => {})
+    request<ReviewSummary>(`/reviews?barberId=${barberId}`, {}, token).then(setReviews).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, barberId])
 
   const filtered = useMemo(() => {
     const { start, end } = agendaRange(filter, customDate)
@@ -1371,7 +1421,7 @@ function BarberAgendaPage({ session }: { session: Session }) {
   async function handleConclude(id: string) {
     setConcludingId(id)
     try {
-      const updated = await request<Appointment>(`/appointments/${id}/conclude`, { method: 'POST' }, session.accessToken)
+      const updated = await request<Appointment>(`/appointments/${id}/conclude`, { method: 'POST' }, token)
       setAppointments((prev) => prev.map((a) => (a.appointmentId === id ? updated : a)))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível concluir o atendimento.')
@@ -1380,6 +1430,45 @@ function BarberAgendaPage({ session }: { session: Session }) {
     }
   }
 
+  async function handleCreateBlock(durationMinutes: 15 | 30 | 60) {
+    setError(''); setSuccess(''); setCreatingBlock(true)
+    try {
+      await request<ExpressBlock>(`/barbers/${barberId}/express-blocks`, {
+        method: 'POST', body: JSON.stringify({ durationMinutes }),
+      }, token)
+      setSuccess(`Agenda bloqueada por ${durationMinutes} minutos.`)
+      setBlockMenuOpen(false)
+      loadBlocks()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível bloquear a agenda.')
+      setBlockMenuOpen(false)
+    } finally {
+      setCreatingBlock(false)
+    }
+  }
+
+  async function handleDeleteBlock(blockId: string) {
+    try {
+      await request(`/barbers/${barberId}/express-blocks/${blockId}`, { method: 'DELETE' }, token)
+      setBlocks((prev) => prev.filter((b) => b.blockId !== blockId))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível remover o bloqueio.')
+    }
+  }
+
+  async function handleCall(id: string) {
+    setError(''); setSuccess(''); setCallingId(id)
+    try {
+      await request(`/appointments/${id}/call-client`, { method: 'POST' }, token)
+      setSuccess('Cliente chamado! Notificação enviada.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível chamar o cliente.')
+    } finally {
+      setCallingId(null)
+    }
+  }
+
+  const activeGoal = goals[0]
   const customLabel = customDate
     ? new Date(customDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
     : 'Data'
@@ -1393,6 +1482,80 @@ function BarberAgendaPage({ session }: { session: Session }) {
         <div className="mb-4 hidden lg:block">
           <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Minha Agenda</h1>
         </div>
+
+        {/* Resumo: avaliações, meta e bloqueio express */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          {/* Avaliações */}
+          <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-3">
+            <p className="text-[11px] font-medium text-on-surface-variant mb-0.5">Avaliações</p>
+            <div className="flex items-center gap-1.5">
+              <Icon name="star" filled className="text-[20px] text-yellow-500" />
+              <span className="text-[18px] font-bold text-on-surface">{reviews ? reviews.average.toFixed(1) : '—'}</span>
+              <span className="text-[12px] text-on-surface-variant">({reviews?.count ?? 0})</span>
+            </div>
+          </div>
+          {/* Meta */}
+          <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-3">
+            <p className="text-[11px] font-medium text-on-surface-variant mb-1">Meta do período</p>
+            {activeGoal ? (
+              <>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-[14px] font-bold text-on-surface">{activeGoal.completed}/{activeGoal.targetAppointments}</span>
+                  <span className="text-[11px] text-on-surface-variant">{activeGoal.progressPct}%</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
+                  <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${activeGoal.progressPct}%` }} />
+                </div>
+              </>
+            ) : (
+              <span className="text-[12px] text-on-surface-variant">Nenhuma meta definida</span>
+            )}
+          </div>
+          {/* Bloqueio express */}
+          <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-3 relative">
+            <p className="text-[11px] font-medium text-on-surface-variant mb-1">Pausa rápida</p>
+            <button
+              onClick={() => setBlockMenuOpen((v) => !v)}
+              disabled={creatingBlock}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-secondary-fixed text-on-secondary-container hover:opacity-80 disabled:opacity-40 transition-opacity"
+            >
+              <Icon name="block" className="text-[16px]" />
+              {creatingBlock ? 'Bloqueando...' : 'Bloquear agenda'}
+            </button>
+            {blockMenuOpen && (
+              <div className="absolute z-20 left-3 right-3 mt-1 bg-surface-container-lowest border border-on-surface/15 rounded-lg shadow-lg p-1 flex gap-1">
+                {[15, 30, 60].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => handleCreateBlock(d as 15 | 30 | 60)}
+                    className="flex-1 px-2 py-1.5 rounded-md text-[12px] font-semibold text-on-surface hover:bg-primary-fixed transition-colors"
+                  >
+                    {d}min
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Bloqueios ativos hoje */}
+        {blocks.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-4">
+            {blocks.map((b) => (
+              <span key={b.blockId} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-surface-container-high text-on-surface-variant">
+                <Icon name="block" className="text-[15px]" />
+                {new Date(b.startTimestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                {'–'}
+                {new Date(b.endTimestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                <button onClick={() => handleDeleteBlock(b.blockId)} aria-label="Remover bloqueio" className="hover:text-primary">
+                  <Icon name="close" className="text-[15px]" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {success && <div className="mb-4"><SuccessBanner message={success} /></div>}
 
         {/* Filtros de período + data personalizada */}
         <div className="flex items-center gap-2 mb-3 overflow-x-auto">
@@ -1506,20 +1669,41 @@ function BarberAgendaPage({ session }: { session: Session }) {
                     ))}
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-[12px] text-on-surface-variant">Total</span>
                       <span className="text-[15px] font-bold text-on-surface">{money.format(appt.amountToPay)}</span>
                     </div>
-                    {appt.status === 'CONFIRMED' && (
-                      <button
-                        onClick={() => handleConclude(appt.appointmentId)}
-                        disabled={concludingId === appt.appointmentId}
-                        className="px-4 py-2 rounded-lg text-[12px] font-semibold bg-primary text-on-primary hover:bg-primary-container disabled:opacity-40 transition-colors shadow-sm active:scale-95"
-                      >
-                        {concludingId === appt.appointmentId ? 'Concluindo...' : 'Concluir'}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {appt.clientId && (
+                        <button
+                          onClick={() => setNotesFor({ clientId: appt.clientId!, clientName: appt.clientName ?? 'Cliente' })}
+                          className="flex items-center gap-1 px-3 py-2 rounded-lg text-[12px] font-semibold text-on-surface-variant border border-on-surface/15 hover:bg-surface-container transition-colors"
+                        >
+                          <Icon name="sticky_note_2" className="text-[15px]" />
+                          Notas
+                        </button>
+                      )}
+                      {appt.status === 'CONFIRMED' && (
+                        <button
+                          onClick={() => handleCall(appt.appointmentId)}
+                          disabled={callingId === appt.appointmentId}
+                          className="flex items-center gap-1 px-3 py-2 rounded-lg text-[12px] font-semibold text-secondary border border-secondary hover:bg-secondary-fixed/40 disabled:opacity-40 transition-colors"
+                        >
+                          <Icon name="campaign" className="text-[15px]" />
+                          {callingId === appt.appointmentId ? 'Chamando...' : 'Chamar'}
+                        </button>
+                      )}
+                      {appt.status === 'CONFIRMED' && (
+                        <button
+                          onClick={() => handleConclude(appt.appointmentId)}
+                          disabled={concludingId === appt.appointmentId}
+                          className="px-4 py-2 rounded-lg text-[12px] font-semibold bg-primary text-on-primary hover:bg-primary-container disabled:opacity-40 transition-colors shadow-sm active:scale-95"
+                        >
+                          {concludingId === appt.appointmentId ? 'Concluindo...' : 'Concluir'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
@@ -1527,6 +1711,110 @@ function BarberAgendaPage({ session }: { session: Session }) {
           </div>
         )}
       </main>
+      {notesFor && (
+        <ClientNotesModal session={session} client={notesFor} onClose={() => setNotesFor(null)} />
+      )}
+    </div>
+  )
+}
+
+function ClientNotesModal({
+  session,
+  client,
+  onClose,
+}: {
+  session: Session
+  client: { clientId: string; clientName: string }
+  onClose: () => void
+}) {
+  const [notes, setNotes] = useState<ClientNote[]>([])
+  const [loading, setLoading] = useState(true)
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    request<ClientNote[]>(`/clients/${client.clientId}/notes`, {}, session.accessToken)
+      .then(setNotes)
+      .catch((cause) => setError(cause.message))
+      .finally(() => setLoading(false))
+  }, [client.clientId, session.accessToken])
+
+  async function addNote() {
+    if (!text.trim()) return
+    setSaving(true); setError('')
+    try {
+      const note = await request<ClientNote>(`/clients/${client.clientId}/notes`, {
+        method: 'POST', body: JSON.stringify({ noteText: text.trim() }),
+      }, session.accessToken)
+      // POST retorna sem authorName; recarrega a lista para padronizar.
+      setNotes((prev) => [{ ...note, authorName: session.user.name }, ...prev])
+      setText('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível salvar a nota.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/40 p-0 sm:p-4" onClick={onClose}>
+      <div
+        className="bg-surface-container-lowest w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl max-h-[80vh] flex flex-col shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-on-surface/10">
+          <div className="flex items-center gap-2 min-w-0">
+            <Avatar name={client.clientName} size={36} />
+            <div className="min-w-0">
+              <p className="text-[15px] font-bold text-on-surface truncate">{client.clientName}</p>
+              <p className="text-[11px] text-on-surface-variant">Prancheta de notas</p>
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Fechar" className="p-1 text-on-surface-variant hover:text-on-surface">
+            <Icon name="close" />
+          </button>
+        </div>
+
+        <div className="p-4 flex flex-col gap-2 overflow-y-auto flex-1">
+          {error && <ErrorBanner message={error} />}
+          <div className="flex gap-2">
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Preferências, alergias, observações..."
+              rows={2}
+              className="flex-1 px-3 py-2 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface resize-none focus:outline-none focus:border-secondary"
+            />
+            <button
+              onClick={addNote}
+              disabled={saving || !text.trim()}
+              className="px-3 rounded-lg text-[12px] font-semibold bg-primary text-on-primary disabled:opacity-40 transition-opacity"
+            >
+              {saving ? '...' : 'Salvar'}
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="flex flex-col gap-2 mt-2">
+              {[1, 2].map((i) => <div key={i} className="h-14 bg-surface-container rounded-lg animate-pulse" />)}
+            </div>
+          ) : notes.length === 0 ? (
+            <p className="text-[13px] text-on-surface-variant text-center py-6">Nenhuma nota ainda.</p>
+          ) : (
+            <div className="flex flex-col gap-2 mt-1">
+              {notes.map((n) => (
+                <div key={n.id} className="bg-surface-container rounded-lg p-3">
+                  <p className="text-[13px] text-on-surface whitespace-pre-wrap break-words">{n.noteText}</p>
+                  <p className="text-[11px] text-on-surface-variant mt-1">
+                    {n.authorName} · {new Date(n.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

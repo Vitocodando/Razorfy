@@ -133,4 +133,17 @@ export const api = {
         }),
       },
     ),
+
+  createReview: (
+    token: string,
+    body: { appointmentId: string; rating: number; comment?: string },
+  ) =>
+    request<{ id: string; rating: number; comment: string | null; createdAt: string }>(
+      '/reviews',
+      { method: 'POST', body: JSON.stringify(body) },
+      token,
+    ),
+
+  barberRating: (barberId: string) =>
+    request<{ average: number; count: number }>(`/barbers/${barberId}/rating`),
 };

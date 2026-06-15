@@ -25,7 +25,8 @@ function errorBody(status, code, message, path) {
 }
 function errorHandler(err, req, res, _next) {
     if (err instanceof BusinessError_1.BusinessError) {
-        res.status(err.statusCode).json(errorBody(err.statusCode, err.code, err.message, req.path));
+        const body = errorBody(err.statusCode, err.code, err.message, req.path);
+        res.status(err.statusCode).json(err.details ? { ...body, ...err.details } : body);
         return;
     }
     if (err instanceof zod_1.ZodError) {
@@ -38,12 +39,15 @@ function errorHandler(err, req, res, _next) {
         // Prisma embrulha violações de constraint em PrismaClientKnownRequestError (P2002 = unique)
         if (pgErr.code === 'P2002') {
             const target = pgErr.meta?.target ?? [];
-            const code = target.includes('email') ? 'EMAIL_ALREADY_EXISTS'
-                : target.includes('phone') ? 'PHONE_ALREADY_EXISTS'
-                    : 'DATA_CONFLICT';
-            const message = target.includes('email') ? 'Este e-mail já está cadastrado.'
-                : target.includes('phone') ? 'Este telefone já está cadastrado.'
-                    : 'Registro duplicado.';
+            const has = (field) => target.includes(field) || target.some(t => t.includes(field));
+            const code = has('email') ? 'EMAIL_ALREADY_EXISTS'
+                : has('phone') ? 'PHONE_ALREADY_EXISTS'
+                    : has('appointment_id') ? 'REVIEW_ALREADY_EXISTS'
+                        : 'DATA_CONFLICT';
+            const message = has('email') ? 'Este e-mail já está cadastrado.'
+                : has('phone') ? 'Este telefone já está cadastrado.'
+                    : has('appointment_id') ? 'Este atendimento já foi avaliado.'
+                        : 'Registro duplicado.';
             res.status(409).json(errorBody(409, code, message, req.path));
             return;
         }

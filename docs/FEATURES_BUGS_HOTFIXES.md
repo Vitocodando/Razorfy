@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-15T16:55:00
+last_updated: 2026-06-17T15:10:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -867,6 +867,24 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `depends_on`: `FEAT-024`
 - `risk`: `LOW`
 - `target_release`: `UNPLANNED` (Fatia 2)
+
+### FEAT-067 - Retratos dos barbeiros com seleção em parallax
+
+- `status`: `IMPLEMENTED`
+- `area`: `FRONTEND`
+- `actors`: `CLIENT`
+- `description`: No passo de escolha do profissional (`CalendarPage` web), um hero exibe o retrato do barbeiro selecionado com efeito parallax (imagem e rótulo se deslocam em camadas conforme o mouse). Cada opção de barbeiro mostra a miniatura do retrato; "Sem preferência" exibe placeholder neutro.
+- `assets`: retratos gerados via Higgsfield (modelo `soul_2`) em `frontend/public/barbers/{rafael,bruno}.png`. Mapa nome→imagem por substring (`barberImageFor`).
+- `business_rules`: mapeamento por nome do seed (Rafael, Bruno); barbeiros sem imagem caem no avatar de iniciais. Não há `avatarUrl` no banco — mapeamento é no frontend (follow-up: persistir imagem por barbeiro).
+- `api`: `NONE`.
+- `frontend`: `frontend/src/App.tsx` (`BarberParallax`, `BARBER_IMAGES`, miniaturas na lista).
+- `database_changes`: `NONE`
+- `api_compatibility`: `NOT_APPLICABLE`
+- `depends_on`: `FEAT-049`
+- `acceptance`: ao selecionar um barbeiro, o hero mostra o retrato dele com parallax; miniatura aparece em cada opção.
+- `tests`: build de produção aprovado.
+- `notes`: PNGs ~4MB cada (não otimizados) — candidato a compressão/WebP antes de produção.
+- `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas
 

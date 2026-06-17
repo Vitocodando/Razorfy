@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { FormEvent, InputHTMLAttributes, ReactNode } from 'react'
+import type { FormEvent, InputHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 
@@ -1010,6 +1010,65 @@ function WalletPage({ session }: { session: Session }) {
 
 // ---------- Calendário (CLIENT — agendamento com cashback) ----------
 
+// Mapa nome do barbeiro → retrato (gerado via Higgsfield). Match por substring do nome.
+const BARBER_IMAGES: { match: string; src: string }[] = [
+  { match: 'rafael', src: '/barbers/rafael.png' },
+  { match: 'bruno', src: '/barbers/bruno.png' },
+]
+function barberImageFor(name?: string): string | undefined {
+  if (!name) return undefined
+  const lower = name.toLowerCase()
+  return BARBER_IMAGES.find((b) => lower.includes(b.match))?.src
+}
+
+// Hero com efeito parallax: a imagem e o rótulo se deslocam em camadas conforme o mouse.
+function BarberParallax({ name, image, subtitle }: { name: string; image?: string; subtitle: string }) {
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+
+  function handleMove(e: ReactMouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    setOffset({
+      x: (e.clientX - rect.left) / rect.width - 0.5,
+      y: (e.clientY - rect.top) / rect.height - 0.5,
+    })
+  }
+
+  return (
+    <div
+      onMouseMove={handleMove}
+      onMouseLeave={() => setOffset({ x: 0, y: 0 })}
+      className="relative h-52 lg:h-64 rounded-2xl overflow-hidden bg-surface-container-high shadow-md select-none [perspective:1000px]"
+    >
+      {image ? (
+        <img
+          key={image}
+          src={image}
+          alt={name}
+          draggable={false}
+          className="absolute inset-0 w-full h-full object-cover object-top transition-transform duration-200 ease-out will-change-transform"
+          style={{ transform: `scale(1.18) translate3d(${offset.x * -26}px, ${offset.y * -26}px, 0)` }}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-secondary-fixed to-surface-container-highest">
+          <Icon name="group" className="text-[72px] text-on-secondary-container/50" />
+        </div>
+      )}
+
+      {/* Vinheta para legibilidade do texto */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent pointer-events-none" />
+
+      {/* Rótulo em camada de profundidade (move no sentido oposto da imagem) */}
+      <div
+        className="absolute bottom-0 left-0 right-0 p-4 transition-transform duration-200 ease-out pointer-events-none"
+        style={{ transform: `translate3d(${offset.x * 14}px, ${offset.y * 14}px, 0)` }}
+      >
+        <p className="text-white text-[22px] font-bold drop-shadow-md leading-tight">{name}</p>
+        <p className="text-white/80 text-[12px] font-medium">{subtitle}</p>
+      </div>
+    </div>
+  )
+}
+
 function CalendarPage({
   session,
   selectedServiceIds,
@@ -1157,6 +1216,13 @@ function CalendarPage({
           {/* Coluna: profissional */}
           <div className="lg:col-span-5 flex flex-col gap-4">
             <h2 className="text-[20px] font-semibold text-on-surface border-b border-on-surface/10 pb-2">Profissional</h2>
+            {(() => {
+              const sel = barbers.find((b) => b.id === barberId)
+              const name = barberId === '' ? 'Sem preferência' : sel?.name ?? '—'
+              const image = barberId === '' ? undefined : barberImageFor(sel?.name)
+              const subtitle = barberId === '' ? 'Qualquer profissional disponível' : 'Profissional selecionado'
+              return <BarberParallax name={name} image={image} subtitle={subtitle} />
+            })()}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
               <button
                 onClick={() => setBarberId('')}
@@ -1180,9 +1246,17 @@ function CalendarPage({
                     barberId === barber.id ? 'border-2 border-primary' : 'border border-on-surface/10'
                   }`}
                 >
-                  <div className="w-12 h-12 rounded-full bg-secondary-fixed text-on-secondary-container flex items-center justify-center shrink-0 font-bold">
-                    {barber.name.slice(0, 2).toUpperCase()}
-                  </div>
+                  {barberImageFor(barber.name) ? (
+                    <img
+                      src={barberImageFor(barber.name)}
+                      alt={barber.name}
+                      className="w-12 h-12 rounded-full object-cover object-top shrink-0"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-secondary-fixed text-on-secondary-container flex items-center justify-center shrink-0 font-bold">
+                      {barber.name.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
                   <div>
                     <div className="text-[14px] font-semibold text-on-surface">{barber.name}</div>
                     <div className="text-[14px] text-on-surface-variant mt-1">Barbeiro</div>

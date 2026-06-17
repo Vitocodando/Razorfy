@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-15T16:30:00
+last_updated: 2026-06-15T16:55:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -323,10 +323,10 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `area`: `CASHBACK`
 - `actors`: `BARBER`, `ADMIN`, `SYSTEM`
 - `description`: Credita cashback quando o atendimento muda para `CONCLUDED`.
-- `default_rate`: `5%`
-- `formula`: `amount_paid * cashback_rate`.
-- `rules`: valor pago com cashback não gera novo cashback.
-- `tests`: R$ 30,00 pagos geram R$ 1,50; R$ 80,00 geram R$ 4,00.
+- `default_rate`: `10%` (`CASHBACK_RATE`, default `0.1`).
+- `formula`: `amount_paid * cashback_rate` — incide sobre o valor efetivamente pago em dinheiro.
+- `rules`: valor pago com cashback não gera novo cashback (ex.: total R$ 35, R$ 10 em cashback, R$ 25 pagos → gera R$ 2,50).
+- `tests`: R$ 25,00 pagos geram R$ 2,50; R$ 35,00 pagos geram R$ 3,50.
 
 ### FEAT-021 - Extrato de cashback
 
@@ -874,7 +874,7 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | --- | --- | --- |
 | `RN-001` | Duração total é a soma dos serviços | `FEAT-008`, `FEAT-009`, `FEAT-010` |
 | `RN-002` | Cancelamento autônomo exige pelo menos 2 horas | `FEAT-023` |
-| `RN-003` | Cashback incide somente sobre dinheiro efetivamente pago | `FEAT-020` |
+| `RN-003` | Cashback = 10% sobre o valor efetivamente pago em dinheiro (`amount_paid`); cashback usado não gera novo cashback | `FEAT-020` |
 | `RN-004` | Cashback é creditado apenas na conclusão | `FEAT-020`, `FEAT-024` |
 | `RN-005` | Intervalos do mesmo barbeiro não podem se sobrepor | `FEAT-012` |
 | `RN-006` | Agendamento deve respeitar jornada e almoço | `FEAT-007`, `FEAT-008`, `FEAT-010` |

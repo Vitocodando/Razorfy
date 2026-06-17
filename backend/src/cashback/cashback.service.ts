@@ -102,6 +102,7 @@ export async function creditEarned(
   amountPaid: Prisma.Decimal,
   cashbackRate: number,
 ): Promise<Prisma.Decimal> {
+  // Cashback incide sobre o valor efetivamente pago em dinheiro, não sobre o total dos serviços.
   const earned = amountPaid.mul(cashbackRate).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
   if (earned.equals(0)) return earned;
   const newBalance = wallet.balance.plus(earned);

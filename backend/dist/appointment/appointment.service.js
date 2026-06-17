@@ -278,6 +278,7 @@ async function concludeAppointment(appointmentId, actorId) {
             throw new BusinessError_1.BusinessError('INVALID_APPOINTMENT_STATE', 'Apenas agendamentos confirmados podem ser concluídos.', 422);
         }
         const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
+        // Cashback = 10% sobre o valor efetivamente pago em dinheiro (amountPaid); valor pago com cashback não gera novo cashback.
         const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, config_1.config.CASHBACK_RATE);
         const updated = await tx.appointment.update({
             where: { id: appt.id },

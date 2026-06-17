@@ -277,6 +277,7 @@ export async function concludeAppointment(appointmentId: string, actorId: string
     }
 
     const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
+    // Cashback = 10% sobre o valor efetivamente pago em dinheiro (amountPaid); valor pago com cashback não gera novo cashback.
     const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, config.CASHBACK_RATE);
 
     const updated = await tx.appointment.update({

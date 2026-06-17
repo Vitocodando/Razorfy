@@ -68,6 +68,7 @@ async function refund(tx, wallet, appointmentId, amount) {
     wallet.balance = newBalance;
 }
 async function creditEarned(tx, wallet, appointmentId, amountPaid, cashbackRate) {
+    // Cashback incide sobre o valor efetivamente pago em dinheiro, não sobre o total dos serviços.
     const earned = amountPaid.mul(cashbackRate).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP);
     if (earned.equals(0))
         return earned;

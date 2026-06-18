@@ -139,6 +139,26 @@ function canCancelFrontend(startTimestamp: string): boolean {
   return new Date(startTimestamp).getTime() - Date.now() >= 2 * 60 * 60 * 1000
 }
 
+// Sugestão de cashback: paga serviços completos em ordem crescente de preço enquanto o saldo
+// cobrir; para no primeiro que não couber. Cashback nunca abate parcialmente um serviço.
+function suggestCashback(
+  services: { id: string; name: string; price: number }[],
+  available: number,
+): { services: { id: string; name: string; price: number }[]; amount: number } {
+  const sorted = [...services].sort((a, b) => a.price - b.price)
+  const picked: typeof sorted = []
+  let sum = 0
+  for (const s of sorted) {
+    if (sum + s.price <= available + 1e-6) {
+      picked.push(s)
+      sum += s.price
+    } else {
+      break
+    }
+  }
+  return { services: picked, amount: Number(sum.toFixed(2)) }
+}
+
 async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -1089,7 +1109,6 @@ function CalendarPage({
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [startTimestamp, setStartTimestamp] = useState('')
   const [useCashback, setUseCashback] = useState(false)
-  const [cashbackAmount, setCashbackAmount] = useState('')
   const [result, setResult] = useState<Appointment | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1106,15 +1125,9 @@ function CalendarPage({
     ]).then(([serviceData, barberData, walletData]) => {
       setServices(serviceData)
       setBarbers(barberData)
-      if (walletData) {
-        setWallet(walletData)
-        if (walletData.availableBalance > 0) {
-          const maxCashback = Math.min(walletData.availableBalance, total)
-          setCashbackAmount(maxCashback.toFixed(2))
-        }
-      }
+      if (walletData) setWallet(walletData)
     }).catch((cause) => setError(cause.message))
-  }, [session.accessToken, total])
+  }, [session.accessToken])
 
   useEffect(() => {
     if (!date || !duration || !barbers.length) return
@@ -1142,17 +1155,19 @@ function CalendarPage({
 
   const times = useMemo(() => [...slots.keys()].sort(), [slots])
 
-  const maxCashback = wallet ? Math.min(wallet.availableBalance, total) : 0
-  const cashbackVal = useCashback ? Math.min(parseFloat(cashbackAmount) || 0, maxCashback) : 0
-  const finalTotal = Math.max(0, total - cashbackVal)
+  // Sugestão: cashback paga os serviços completos mais baratos que o saldo cobrir.
+  const suggestion = wallet ? suggestCashback(chosen, wallet.availableBalance) : { services: [], amount: 0 }
+  const canUseCashback = suggestion.amount > 0
+  const cashbackApplied = useCashback ? suggestion.amount : 0
+  const finalTotal = Math.max(0, total - cashbackApplied)
 
   async function book() {
     if (!startTimestamp) return setError('Escolha um horário disponível.')
     const availableBarbers = slots.get(startTimestamp) ?? []
     const chosenBarberId = barberId || availableBarbers[0]
     if (!chosenBarberId) return setError('Horário indisponível. Escolha outro.')
-    if (useCashback && (!cashbackVal || cashbackVal <= 0)) {
-      return setError('Informe um valor de cashback válido.')
+    if (useCashback && !canUseCashback) {
+      return setError('Saldo de cashback insuficiente para pagar qualquer serviço por completo.')
     }
     setError('')
     setLoading(true)
@@ -1164,7 +1179,7 @@ function CalendarPage({
           serviceIds: selectedServiceIds,
           startTimestamp,
           useCashback,
-          cashbackAmountToApply: useCashback ? cashbackVal : null,
+          cashbackAmountToApply: useCashback ? suggestion.amount : null,
           paymentMethod: 'PRESENTIAL',
         }),
       }, session.accessToken)
@@ -1309,40 +1324,34 @@ function CalendarPage({
               </div>
             )}
 
-            {/* Cashback */}
+            {/* Cashback — sugestão paga serviços completos (mais baratos primeiro) */}
             {wallet && wallet.availableBalance > 0 && (
               <div className="bg-surface-container-low rounded-xl p-3 border border-on-surface/10">
-                <label className="flex items-center gap-3 cursor-pointer">
+                <label className={`flex items-start gap-3 ${canUseCashback ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                   <input
                     type="checkbox"
                     checked={useCashback}
-                    onChange={(e) => {
-                      setUseCashback(e.target.checked)
-                      if (e.target.checked) {
-                        setCashbackAmount(Math.min(wallet.availableBalance, total).toFixed(2))
-                      }
-                    }}
-                    className="w-4 h-4 accent-primary"
+                    disabled={!canUseCashback}
+                    onChange={(e) => setUseCashback(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 accent-primary"
                   />
                   <span className="text-[13px] font-semibold text-on-surface">
-                    Usar cashback disponível ({money.format(wallet.availableBalance)})
+                    Usar cashback ({money.format(wallet.availableBalance)} disponível)
+                    {canUseCashback ? (
+                      <span className="block text-[11px] font-normal text-on-surface-variant mt-0.5">
+                        Sugestão: pagar {suggestion.services.map((s) => s.name).join(' + ')} com cashback
+                        {' '}({money.format(suggestion.amount)}).
+                        {finalTotal > 0
+                          ? ` Restante a pagar no balcão: ${money.format(finalTotal)}.`
+                          : ' Cobre todos os serviços selecionados.'}
+                      </span>
+                    ) : (
+                      <span className="block text-[11px] font-normal text-on-surface-variant mt-0.5">
+                        Saldo insuficiente para pagar qualquer serviço por completo.
+                      </span>
+                    )}
                   </span>
                 </label>
-                {useCashback && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="text-[12px] text-on-surface-variant">Valor:</span>
-                    <input
-                      type="number"
-                      min="0.01"
-                      max={maxCashback.toFixed(2)}
-                      step="0.01"
-                      value={cashbackAmount}
-                      onChange={(e) => setCashbackAmount(e.target.value)}
-                      className="w-28 h-9 px-2 bg-surface-container-lowest border border-on-surface/10 rounded-lg text-[13px] focus:outline-none focus:border-secondary"
-                    />
-                    <span className="text-[12px] text-on-surface-variant">→ paga {money.format(finalTotal)}</span>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1362,8 +1371,12 @@ function CalendarPage({
             </span>
             <span className="text-[12px] font-medium text-on-surface-variant">
               {duration} min •{' '}
-              {useCashback && cashbackVal > 0 ? (
-                <><s className="opacity-50">{money.format(total)}</s>{' '}<strong className="text-primary">{money.format(finalTotal)}</strong></>
+              {useCashback && cashbackApplied > 0 ? (
+                <>
+                  <s className="opacity-50">{money.format(total)}</s>{' '}
+                  <strong className="text-primary">{money.format(finalTotal)}</strong>
+                  {' '}<span className="text-[11px]">(−{money.format(cashbackApplied)} cashback)</span>
+                </>
               ) : (
                 <strong className="text-primary">{money.format(total)}</strong>
               )}

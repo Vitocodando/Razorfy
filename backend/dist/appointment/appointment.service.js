@@ -105,7 +105,7 @@ async function createAppointment(clientId, body) {
             throw new BusinessError_1.BusinessError('SERVICE_NOT_FOUND', 'Um ou mais serviços não estão disponíveis.', 422);
         }
         const total = selectedServices.reduce((acc, s) => acc.plus(s.price), new client_1.Prisma.Decimal(0)).toDecimalPlaces(2);
-        const requestedCashback = normalizeCashback(body.useCashback, body.cashbackAmountToApply, total);
+        const requestedCashback = normalizeCashback(body.useCashback, body.cashbackAmountToApply, selectedServices.map(s => s.price));
         const start = new Date(body.startTimestamp);
         const end = (0, appointment_policy_1.calculateEnd)(start, selectedServices.map(s => s.durationMinutes));
         if (start <= new Date()) {
@@ -356,19 +356,34 @@ async function cancelOverbookingInTx(tx, appt) {
     (0, mockGateway_1.refund)(appt.id, appt.paymentReference);
     await auditSvc.statusChanged(tx, appt.id, 'PENDING_PAYMENT', 'CANCELLED_OVERBOOKING', null, { source: 'OVERBOOKING' });
 }
-function normalizeCashback(useCashback, amount, total) {
+function normalizeCashback(useCashback, amount, servicePrices) {
     if (!useCashback) {
         if (amount && amount > 0) {
             throw new BusinessError_1.BusinessError('INVALID_CASHBACK_AMOUNT', 'Ative o uso de cashback para informar um valor.', 422);
         }
         return new client_1.Prisma.Decimal(0);
     }
-    if (!amount || amount <= 0) {
+    const dec = new client_1.Prisma.Decimal(amount ?? 0).toDecimalPlaces(2);
+    if (dec.lessThanOrEqualTo(0)) {
         throw new BusinessError_1.BusinessError('INVALID_CASHBACK_AMOUNT', 'O valor de cashback deve ser maior que zero.', 422);
     }
-    const dec = new client_1.Prisma.Decimal(amount).toDecimalPlaces(2);
-    if (dec.greaterThan(total)) {
-        throw new BusinessError_1.BusinessError('CASHBACK_EXCEEDS_TOTAL', 'O cashback aplicado não pode exceder o valor total do agendamento.', 422);
+    // Sem pagamento no app: cashback paga serviços COMPLETOS (nunca abatimento parcial de um serviço).
+    // O valor aplicado deve corresponder à soma de algum subconjunto dos serviços selecionados.
+    if (!isSubsetSumOfServices(servicePrices, dec)) {
+        throw new BusinessError_1.BusinessError('CASHBACK_PARTIAL_SERVICE', 'O cashback só pode pagar serviços inteiros — o valor deve corresponder à soma de um ou mais serviços selecionados.', 422);
     }
     return dec;
+}
+// Verifica se `target` (em reais) é a soma de algum subconjunto dos preços (em centavos, exato).
+function isSubsetSumOfServices(prices, target) {
+    const cents = prices.map(p => p.times(100).toNearest(1).toNumber());
+    const targetCents = target.times(100).toNearest(1).toNumber();
+    if (targetCents === 0)
+        return false;
+    const reachable = new Set([0]);
+    for (const c of cents) {
+        for (const sum of [...reachable])
+            reachable.add(sum + c);
+    }
+    return reachable.has(targetCents);
 }

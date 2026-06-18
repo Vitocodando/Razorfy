@@ -5,7 +5,6 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import {
@@ -28,11 +27,31 @@ import type {
 type Props = NativeStackScreenProps<RootStackParamList, 'Checkout'>;
 type PaymentMethod = 'ONLINE_PIX' | 'PRESENTIAL';
 
+// Sugestão: paga serviços completos em ordem crescente de preço enquanto o saldo cobrir;
+// para no primeiro que não couber. Cashback nunca abate parcialmente um serviço.
+function suggestCashback(
+  services: ServiceItem[],
+  available: number,
+): { services: ServiceItem[]; amount: number } {
+  const sorted = [...services].sort((a, b) => a.price - b.price);
+  const picked: ServiceItem[] = [];
+  let sum = 0;
+  for (const s of sorted) {
+    if (sum + s.price <= available + 1e-6) {
+      picked.push(s);
+      sum += s.price;
+    } else {
+      break;
+    }
+  }
+  return { services: picked, amount: Number(sum.toFixed(2)) };
+}
+
 export function CheckoutScreen({ navigation, route }: Props) {
   const { session } = useAuth();
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [cashbackInput, setCashbackInput] = useState('0');
+  const [useCashback, setUseCashback] = useState(false);
   const [paymentMethod, setPaymentMethod] =
     useState<PaymentMethod>('ONLINE_PIX');
   const [loading, setLoading] = useState(true);
@@ -61,9 +80,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
     (sum, service) => sum + service.durationMinutes,
     0,
   );
-  const requestedCashback = Number(cashbackInput.replace(',', '.')) || 0;
-  const maxCashback = Math.min(total, wallet?.availableBalance ?? 0);
-  const cashback = Math.min(Math.max(requestedCashback, 0), maxCashback);
+  // Sugestão: cashback paga serviços completos mais baratos primeiro, enquanto o saldo cobrir.
+  const suggestion = suggestCashback(chosen, wallet?.availableBalance ?? 0);
+  const canUseCashback = suggestion.amount > 0;
+  const cashback = useCashback ? suggestion.amount : 0;
   const amountToPay = Math.max(total - cashback, 0);
 
   async function submit() {
@@ -75,9 +95,10 @@ export function CheckoutScreen({ navigation, route }: Props) {
         barberId: route.params.barberId,
         serviceIds: route.params.serviceIds,
         startTimestamp: route.params.startTimestamp,
-        useCashback: cashback > 0,
-        cashbackAmountToApply: cashback,
-        paymentMethod,
+        useCashback,
+        cashbackAmountToApply: useCashback ? suggestion.amount : 0,
+        // Restante (se houver) é pago no balcão; cashback cobre serviços completos.
+        paymentMethod: useCashback ? 'PRESENTIAL' : paymentMethod,
       });
       navigation.replace('Success', { appointment });
     } catch (cause) {
@@ -134,62 +155,68 @@ export function CheckoutScreen({ navigation, route }: Props) {
       </Card>
 
       <Text style={styles.sectionTitle}>Cashback</Text>
-      <Card style={styles.cashbackCard}>
-        <View style={styles.cashbackHeader}>
-          <View style={styles.walletIcon}>
-            <Ionicons name="wallet-outline" size={21} color={colors.blue} />
+      <Pressable
+        onPress={() => canUseCashback && setUseCashback((v) => !v)}
+        disabled={!canUseCashback}
+      >
+        <Card style={[styles.cashbackCard, !canUseCashback && styles.cashbackDisabled]}>
+          <View style={styles.cashbackHeader}>
+            <View style={styles.walletIcon}>
+              <Ionicons name="wallet-outline" size={21} color={colors.blue} />
+            </View>
+            <View style={styles.cashbackCopy}>
+              <Text style={styles.cashbackTitle}>
+                Usar cashback ({money.format(wallet?.availableBalance ?? 0)})
+              </Text>
+              <Text style={styles.cashbackBalance}>
+                {canUseCashback
+                  ? `Sugestão: pagar ${suggestion.services
+                      .map((s) => s.name)
+                      .join(' + ')} (${money.format(suggestion.amount)})${
+                      total - suggestion.amount > 0
+                        ? ` · resto no balcão: ${money.format(total - suggestion.amount)}`
+                        : ' · cobre tudo'
+                    }`
+                  : 'Saldo insuficiente para pagar qualquer serviço por completo'}
+              </Text>
+            </View>
+            <View style={[styles.cashbackCheck, useCashback && styles.cashbackCheckOn]}>
+              {useCashback ? <Ionicons name="checkmark" size={16} color={colors.white} /> : null}
+            </View>
           </View>
-          <View style={styles.cashbackCopy}>
-            <Text style={styles.cashbackTitle}>Usar saldo</Text>
-            <Text style={styles.cashbackBalance}>
-              Disponível: {money.format(wallet?.availableBalance ?? 0)}
-            </Text>
-          </View>
-          <View style={styles.cashbackInputWrap}>
-            <Text style={styles.currencyPrefix}>R$</Text>
-            <TextInput
-              keyboardType="decimal-pad"
-              value={cashbackInput}
-              onChangeText={setCashbackInput}
-              onBlur={() => setCashbackInput(cashback.toFixed(2).replace('.', ','))}
-              selectTextOnFocus
-              style={styles.cashbackInput}
+        </Card>
+      </Pressable>
+
+      {!useCashback ? (
+        <>
+          <Text style={styles.sectionTitle}>Forma de pagamento</Text>
+          <View style={styles.paymentList}>
+            <PaymentOption
+              selected={paymentMethod === 'ONLINE_PIX'}
+              icon="qr-code-outline"
+              title="PIX online"
+              description="Confirmação após a compensação"
+              onPress={() => setPaymentMethod('ONLINE_PIX')}
+            />
+            <PaymentOption
+              selected={paymentMethod === 'PRESENTIAL'}
+              icon="storefront-outline"
+              title="Pagar no balcão"
+              description="Pagamento no dia do atendimento"
+              onPress={() => setPaymentMethod('PRESENTIAL')}
             />
           </View>
-        </View>
-        <Pressable
-          onPress={() => setCashbackInput(maxCashback.toFixed(2).replace('.', ','))}
-        >
-          <Text style={styles.useMaximum}>
-            Aplicar máximo de {money.format(maxCashback)}
-          </Text>
-        </Pressable>
-      </Card>
-
-      <Text style={styles.sectionTitle}>Forma de pagamento</Text>
-      <View style={styles.paymentList}>
-        <PaymentOption
-          selected={paymentMethod === 'ONLINE_PIX'}
-          icon="qr-code-outline"
-          title="PIX online"
-          description="Confirmação após a compensação"
-          onPress={() => setPaymentMethod('ONLINE_PIX')}
-        />
-        <PaymentOption
-          selected={paymentMethod === 'PRESENTIAL'}
-          icon="storefront-outline"
-          title="Pagar no balcão"
-          description="Pagamento no dia do atendimento"
-          onPress={() => setPaymentMethod('PRESENTIAL')}
-        />
-      </View>
+        </>
+      ) : null}
 
       <Card style={styles.finalTotal}>
         <View>
           <Text style={styles.finalLabel}>Total a pagar</Text>
           {cashback > 0 ? (
             <Text style={styles.discountText}>
-              {money.format(cashback)} em cashback aplicado
+              {amountToPay > 0
+                ? `${money.format(cashback)} pagos com cashback`
+                : 'Pago integralmente com cashback'}
             </Text>
           ) : null}
         </View>
@@ -199,7 +226,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
       <ErrorMessage message={error} />
       <PrimaryButton
         label={
-          paymentMethod === 'ONLINE_PIX'
+          !useCashback && paymentMethod === 'ONLINE_PIX'
             ? 'Reservar e gerar PIX'
             : 'Confirmar agendamento'
         }
@@ -207,7 +234,7 @@ export function CheckoutScreen({ navigation, route }: Props) {
         loading={submitting}
         onPress={submit}
       />
-      {paymentMethod === 'ONLINE_PIX' ? (
+      {!useCashback && paymentMethod === 'ONLINE_PIX' ? (
         <Text style={styles.holdNote}>
           O horário ficará protegido por 10 minutos enquanto o PIX é pago.
         </Text>
@@ -384,35 +411,21 @@ const styles = StyleSheet.create({
     fontSize: 9,
     marginTop: 3,
   },
-  cashbackInputWrap: {
-    width: 94,
-    height: 43,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 9,
-    borderRadius: 13,
-    borderWidth: 1,
+  cashbackDisabled: {
+    opacity: 0.55,
+  },
+  cashbackCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
     borderColor: colors.line,
-    backgroundColor: colors.cream,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  currencyPrefix: {
-    color: colors.muted,
-    fontFamily: fonts.semibold,
-    fontSize: 10,
-  },
-  cashbackInput: {
-    flex: 1,
-    color: colors.ink,
-    fontFamily: fonts.bold,
-    fontSize: 12,
-    textAlign: 'right',
-  },
-  useMaximum: {
-    color: colors.red,
-    fontFamily: fonts.semibold,
-    fontSize: 10,
-    textAlign: 'right',
-    marginTop: 11,
+  cashbackCheckOn: {
+    backgroundColor: colors.red,
+    borderColor: colors.red,
   },
   paymentList: {
     gap: 10,

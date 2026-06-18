@@ -3,7 +3,7 @@ document_id: BARBERFLOW-FEATURE-REGISTRY
 schema_version: 1
 project: BarberFlow
 language: pt-BR
-last_updated: 2026-06-17T15:10:00
+last_updated: 2026-06-17T16:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -312,10 +312,10 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `status`: `IMPLEMENTED`
 - `area`: `CASHBACK`
 - `actors`: `CLIENT`
-- `description`: Aplica desconto parcial ou total até o menor valor entre saldo disponível e total.
-- `rules`: valor reservado durante pagamento pendente; debitado somente na confirmação.
-- `errors`: `CASHBACK_INSUFFICIENT_FUNDS`, `CASHBACK_EXCEEDS_TOTAL`.
-- `tests`: saldo insuficiente validado com HTTP `422`.
+- `description`: Cashback paga **serviços completos** — o valor aplicado deve corresponder à soma de um subconjunto dos serviços selecionados (nunca abatimento parcial de um serviço, pois não há pagamento no app). Pode cobrir 1, alguns ou todos os serviços; o restante é pago no balcão.
+- `rules`: `cashbackAmountToApply` deve ser uma soma de subconjunto dos preços dos serviços (validado por subset-sum em centavos); exige saldo disponível ≥ valor aplicado; valor reservado durante pagamento pendente, debitado na confirmação (presencial: na criação). Sugestão automática em `FEAT-068`. Histórico: parcial → total (2026-06-17) → subconjunto de serviços completos (2026-06-17).
+- `errors`: `CASHBACK_PARTIAL_SERVICE` (422, valor não corresponde a serviços inteiros), `CASHBACK_INSUFFICIENT_FUNDS` (422, saldo < valor aplicado).
+- `tests`: valor = preço de 1 serviço → aceito pela regra (cai em `CASHBACK_INSUFFICIENT_FUNDS` sem saldo); valor parcial (R$ 29 de serviço R$ 30) → `422 CASHBACK_PARTIAL_SERVICE`.
 
 ### FEAT-020 - Geração de cashback
 
@@ -646,22 +646,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
-### FEAT-053 - Abatimento de cashback no checkout (frontend)
+### FEAT-053 - Cashback no checkout com sugestão (frontend)
 
 - `status`: `IMPLEMENTED`
 - `area`: `FRONTEND`
 - `actors`: `CLIENT`
-- `description`: No calendário de agendamento, quando o cliente possui saldo disponível, exibe toggle "Usar cashback" com input de valor pré-preenchido com o menor entre saldo disponível e total; valor final é recalculado em tempo real.
-- `business_rules`: input limitado ao máximo permitido; toggle desmarcado envia `useCashback: false`; toggle marcado exige valor > 0; o backend valida e recusa se exceder total ou saldo.
-- `api`: `GET /api/v1/wallet` (fetch no mount do `CalendarPage`); `POST /api/v1/appointments` com campos `useCashback` e `cashbackAmountToApply`.
-- `frontend`: `CalendarPage` em `frontend/src/App.tsx`.
+- `description`: No checkout (web `CalendarPage` e mobile `CheckoutScreen`), um toggle "Usar cashback" aplica a sugestão de `FEAT-068` (pagar os serviços completos mais baratos que o saldo cobrir). Mostra quais serviços o cashback paga e o restante a pagar no balcão.
+- `business_rules`: toggle habilitado quando a sugestão cobre ≥ 1 serviço; marcado → `cashbackAmountToApply = suggestion.amount`, `paymentMethod = PRESENTIAL`; restante (`total − cashback`) pago presencial. Backend valida subset-sum (`CASHBACK_PARTIAL_SERVICE`) e saldo (`CASHBACK_INSUFFICIENT_FUNDS`).
+- `api`: `GET /api/v1/wallet`; `POST /api/v1/appointments` com `useCashback` e `cashbackAmountToApply = soma dos serviços sugeridos`.
+- `frontend`: `CalendarPage` (`frontend/src/App.tsx`) e `CheckoutScreen` (`mobile/src/screens/CheckoutScreen.tsx`).
 - `database_changes`: `NONE`
 - `api_compatibility`: `COMPATIBLE`
-- `depends_on`: `FEAT-019`, `FEAT-049`, `FEAT-052`
-- `acceptance`: cliente com saldo vê o toggle; ao confirmar, o resumo do sucesso exibe o cashback aplicado e o valor final reduzido.
-- `tests`: build de produção aprovado.
+- `depends_on`: `FEAT-019`, `FEAT-049`, `FEAT-052`, `FEAT-068`
+- `acceptance`: cliente com saldo que cobre ao menos o serviço mais barato vê a sugestão; ao confirmar, `cashback_used` = soma dos serviços cobertos e `amount_paid` = restante.
+- `tests`: builds de produção (web `vite build`, mobile `tsc`) aprovados; regra validada por smoke HTTP.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
+- `history`: parcial → integral (tudo-ou-nada) → sugestão por serviços completos (2026-06-17).
 
 ### FEAT-054 - Agenda do barbeiro
 
@@ -886,6 +887,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `notes`: PNGs ~4MB cada (não otimizados) — candidato a compressão/WebP antes de produção.
 - `target_release`: `UNRELEASED`
 
+### FEAT-068 - Sugestão de uso de cashback por serviços completos
+
+- `status`: `IMPLEMENTED`
+- `area`: `CASHBACK`
+- `actors`: `CLIENT`
+- `description`: Dado o saldo de cashback e os serviços selecionados, sugere quais serviços pagar inteiramente com cashback. Algoritmo: ordena os serviços por preço crescente e acumula enquanto o saldo cobrir, **parando no primeiro que não couber** (paga sempre os mais baratos primeiro). Ex.: saldo R$ 15, serviços [Sobrancelha R$ 10, Cabelo R$ 35] → sugere pagar Sobrancelha (R$ 10); Cabelo segue em dinheiro.
+- `business_rules`: nunca abate parcialmente um serviço; só sugere o próximo se couber o menor + o próximo da ordem; restante pago no balcão. O backend valida que o valor enviado é uma soma de subconjunto dos serviços (`FEAT-019`).
+- `api`: `NONE` — sugestão calculada no cliente a partir de `GET /wallet` + preços dos serviços. `POST /appointments` recebe `cashbackAmountToApply` = soma sugerida.
+- `frontend`: `suggestCashback()` em `frontend/src/App.tsx` (`CalendarPage`) e `mobile/src/screens/CheckoutScreen.tsx`.
+- `database_changes`: `NONE`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-018`, `FEAT-019`
+- `acceptance`: com saldo 15 e [10, 35], a UI sugere usar R$ 10 no serviço de R$ 10; com saldo < menor serviço, nenhuma sugestão.
+- `tests`: builds web/mobile aprovados; regra de subconjunto validada por smoke HTTP (`CASHBACK_PARTIAL_SERVICE`).
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -897,6 +915,7 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-005` | Intervalos do mesmo barbeiro não podem se sobrepor | `FEAT-012` |
 | `RN-006` | Agendamento deve respeitar jornada e almoço | `FEAT-007`, `FEAT-008`, `FEAT-010` |
 | `RN-007` | Cashback reservado não pode ser gasto em outra compra | `FEAT-018`, `FEAT-019` |
+| `RN-014` | Cashback paga serviços completos (subconjunto dos selecionados), nunca abatimento parcial de um serviço; sugestão escolhe os mais baratos primeiro | `FEAT-019`, `FEAT-053`, `FEAT-068` |
 | `RN-008` | Pagamento pendente bloqueia o horário por 10 minutos | `FEAT-011` |
 | `RN-009` | Bloqueio express negado se houver interseção com agendamento/bloqueio ativo | `FEAT-059` |
 | `RN-010` | Comentário de avaliação é restrito ao barbeiro avaliado e admin; nota é pública | `FEAT-060` |

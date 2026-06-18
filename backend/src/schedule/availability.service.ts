@@ -20,20 +20,6 @@ function slotWindow(slot: { startTime: Date; endTime: Date; lunchStart: Date | n
 const GRID_MINUTES = 15;
 const BLOCKING_STATUSES = ['PENDING_PAYMENT', 'CONFIRMED'];
 
-function toLocalDateParts(date: Date, tz: string): { year: number; month: number; day: number } {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  return {
-    year: Number(parts.find(p => p.type === 'year')!.value),
-    month: Number(parts.find(p => p.type === 'month')!.value),
-    day: Number(parts.find(p => p.type === 'day')!.value),
-  };
-}
-
 function localMinutesToUtc(dateStr: string, minutes: number, tz: string): Date {
   const h = Math.floor(minutes / 60).toString().padStart(2, '0');
   const m = (minutes % 60).toString().padStart(2, '0');
@@ -84,6 +70,14 @@ function isoWeekday(dateStr: string): number {
   return jsDay === 0 ? 7 : jsDay;
 }
 
+export function localDateString(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: config.BUSINESS_TIMEZONE }).format(date);
+}
+
+export function dateOnlyUtc(dateStr: string): Date {
+  return new Date(`${dateStr}T00:00:00.000Z`);
+}
+
 export async function availableStarts(barberId: string, date: string, durationMinutes: number): Promise<Date[]> {
   if (durationMinutes <= 0 || durationMinutes > 720) {
     throw new BusinessError('INVALID_DURATION', 'A duração deve estar entre 1 e 720 minutos.', 400);
@@ -105,6 +99,16 @@ export async function availableStarts(barberId: string, date: string, durationMi
 
   const dayStartUtc = new Date(getUtcFromLocal(date, '00', '00', tz));
   const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+  const dateOnly = dateOnlyUtc(date);
+
+  const vacation = await prisma.vacationBlock.findFirst({
+    where: {
+      barberId,
+      startDate: { lte: dateOnly },
+      endDate: { gte: dateOnly },
+    },
+  });
+  if (vacation) return [];
 
   const booked = await prisma.appointment.findMany({
     where: {

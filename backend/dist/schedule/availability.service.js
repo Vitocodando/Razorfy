@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.localDateString = localDateString;
+exports.dateOnlyUtc = dateOnlyUtc;
 exports.availableStarts = availableStarts;
 exports.localDayRangeUtc = localDayRangeUtc;
 exports.assertWorkingTime = assertWorkingTime;
@@ -21,19 +23,6 @@ function slotWindow(slot) {
 }
 const GRID_MINUTES = 15;
 const BLOCKING_STATUSES = ['PENDING_PAYMENT', 'CONFIRMED'];
-function toLocalDateParts(date, tz) {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: tz,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-    }).formatToParts(date);
-    return {
-        year: Number(parts.find(p => p.type === 'year').value),
-        month: Number(parts.find(p => p.type === 'month').value),
-        day: Number(parts.find(p => p.type === 'day').value),
-    };
-}
 function localMinutesToUtc(dateStr, minutes, tz) {
     const h = Math.floor(minutes / 60).toString().padStart(2, '0');
     const m = (minutes % 60).toString().padStart(2, '0');
@@ -81,6 +70,12 @@ function isoWeekday(dateStr) {
     const jsDay = d.getUTCDay(); // 0=Sun
     return jsDay === 0 ? 7 : jsDay;
 }
+function localDateString(date = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: config_1.config.BUSINESS_TIMEZONE }).format(date);
+}
+function dateOnlyUtc(dateStr) {
+    return new Date(`${dateStr}T00:00:00.000Z`);
+}
 async function availableStarts(barberId, date, durationMinutes) {
     if (durationMinutes <= 0 || durationMinutes > 720) {
         throw new BusinessError_1.BusinessError('INVALID_DURATION', 'A duração deve estar entre 1 e 720 minutos.', 400);
@@ -99,6 +94,16 @@ async function availableStarts(barberId, date, durationMinutes) {
     const window = slotWindow(slot);
     const dayStartUtc = new Date(getUtcFromLocal(date, '00', '00', tz));
     const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
+    const dateOnly = dateOnlyUtc(date);
+    const vacation = await prisma_1.prisma.vacationBlock.findFirst({
+        where: {
+            barberId,
+            startDate: { lte: dateOnly },
+            endDate: { gte: dateOnly },
+        },
+    });
+    if (vacation)
+        return [];
     const booked = await prisma_1.prisma.appointment.findMany({
         where: {
             barberId,

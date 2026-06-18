@@ -1,16 +1,16 @@
 ---
-document_id: BARBERFLOW-FEATURE-REGISTRY
+document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
-project: BarberFlow
+project: Razorfy
 language: pt-BR
-last_updated: 2026-06-17T16:00:00
+last_updated: 2026-06-18T00:00:00
 source_of_truth: true
 automation_ready: true
 ---
 
 # Registro de Funcionalidades, Bugs e Hotfixes
 
-Este documento é a fonte canônica do BarberFlow para:
+Este documento é a fonte canônica do Razorfy para:
 
 - inventário das funcionalidades implementadas e planejadas;
 - criação automatizada de tarefas de feature;
@@ -116,7 +116,13 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | WhatsApp | `PARTIAL`, integração REST configurável |
 | Outbox e retentativas | `IMPLEMENTED` |
 | Relatório administrativo via API | `IMPLEMENTED` |
-| Dashboard administrativo React | `PLANNED` |
+| Dashboard administrativo React | `IMPLEMENTED` |
+| Cupons administrativos | `IMPLEMENTED` |
+| Repasse por comissão | `IMPLEMENTED` |
+| Férias de barbeiros | `IMPLEMENTED` |
+| No-Show com penalidade de cashback | `IMPLEMENTED` |
+| Radar de detratores | `IMPLEMENTED` |
+| Campanha Win-back | `IMPLEMENTED` |
 | Aplicativo mobile do cliente | `IMPLEMENTED` |
 | Infraestrutura Docker Compose | `IMPLEMENTED` |
 
@@ -421,25 +427,29 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `status`: `IMPLEMENTED`
 - `area`: `REPORT`
 - `actors`: `ADMIN`, `DEV`
-- `api`: `GET /api/v1/reports/summary`
-- `metrics`: confirmados, concluídos, cancelados, receita e produtividade por barbeiro.
-- `frontend`: não implementado.
+- `api`: `GET /api/v1/reports/summary`; `GET /api/v1/admin/dashboard`; `POST /api/v1/admin/reports/daily/rebuild`
+- `metrics`: confirmados, concluídos, no-show, receita bruta/líquida, ticket médio, LTV estimado, ociosidade e ocupação por barbeiro.
+- `frontend`: Centro de Comando em `frontend/src/App.tsx`.
+- `database_changes`: `0005_admin_owner_module` (`daily_admin_reports`).
 
 ### FEAT-032 - Dashboard administrativo
 
-- `status`: `PLANNED`
+- `status`: `IMPLEMENTED`
 - `area`: `REPORT`
 - `actors`: `ADMIN`
-- `description`: Interface React para métricas, profissionais, serviços e configurações.
-- `depends_on`: `FEAT-005`, `FEAT-031`, `FEAT-033`
+- `description`: Interface React para métricas executivas, radar de detratores, grid global, cupons, repasses, férias e disparo manual de Win-back.
+- `api`: rotas sob `/api/v1/admin/*`, com RBAC estrito `ADMIN`.
+- `frontend`: `AdminCommandCenter` em `frontend/src/App.tsx`.
+- `depends_on`: `FEAT-031`, `FEAT-069`
 
 ### FEAT-033 - Gestão de barbeiros e jornadas
 
-- `status`: `PLANNED`
+- `status`: `PARTIAL`
 - `area`: `ADMIN`
 - `actors`: `ADMIN`, `BARBER`
-- `description`: Cadastro de barbeiro, edição de jornada, almoço, férias e bloqueios.
-- `acceptance`: mudanças futuras não podem invalidar silenciosamente agendamentos existentes.
+- `description`: Jornadas e bloqueios existentes; férias administrativas implementadas com validação de conflito. Cadastro/edição de barbeiro permanece planejado.
+- `api`: `GET/POST/DELETE /api/v1/admin/vacation-blocks`
+- `acceptance`: férias não retroativas; período final >= início; conflito com agendamentos `CONFIRMED` retorna `409 VACATION_OVERLAP` com clientes a remarcar.
 
 ### FEAT-034 - Configuração da taxa de cashback
 
@@ -555,7 +565,7 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `typography`: Montserrat local via `@fontsource/montserrat`.
 - `implemented`: autenticação, navegação, agendamento, carteira, histórico, favicon, metadados e textos da marca.
 - `responsive`: desktop, tablet e celular.
-- `acceptance`: não há referências visuais ao nome BarberFlow no frontend; lint e build de produção aprovados.
+- `acceptance`: não há referências visuais ao nome legado BarberFlow no frontend; lint e build de produção aprovados.
 - `risk`: `LOW`
 
 ### FEAT-048 - Aplicativo mobile Razorfy
@@ -793,7 +803,7 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `description`: Admin define metas de atendimentos por período; barbeiro acompanha o progresso (concluídos vs alvo).
 - `business_rules`: **RN03** — leitura (GET) pelo barbeiro próprio/ADMIN; mutação (POST/PUT/DELETE) restrita a ADMIN/DEV (`403` para barbeiro). `period_end >= period_start`, `target > 0`. `completed` = atendimentos `CONCLUDED` no período; `progressPct` limitado a 100.
 - `api`: `GET /api/v1/barbers/{id}/goals`; `POST/PUT/DELETE /api/v1/barber-goals[/:id]` (ADMIN/DEV).
-- `frontend`: web `BarberAgendaPage` (card "Meta do período" com barra de progresso). Mutação admin via API (não há console admin — FEAT-032 `PLANNED`).
+- `frontend`: web `BarberAgendaPage` (card "Meta do período" com barra de progresso). Centro de Comando administrativo implementado em `FEAT-032`, embora a mutação de metas ainda permaneça via API.
 - `database_changes`: `0004_barber_crm` — tabela `barber_goals`.
 - `api_compatibility`: `COMPATIBLE`
 - `depends_on`: `FEAT-024`, `FEAT-003`
@@ -904,6 +914,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
+### FEAT-069 - Centro de Comando do Administrador Dono
+
+- `status`: `IMPLEMENTED`
+- `area`: `ADMIN`
+- `actors`: `ADMIN`
+- `description`: Painel executivo restrito ao dono da barbearia com BI diário, grid global, cupons, matriz de comissão, férias, No-Show com penalidade, Radar de Detratores e Win-back.
+- `business_rules`: rotas `/api/v1/admin/*` exigem usuário com `role = ADMIN` consultado na base; cupom e cashback são mutuamente exclusivos; comissão incide sobre valor líquido recebido; No-Show só após 15 minutos de tolerância e vira estado terminal `NO_SHOW`; férias não podem ser retroativas e conflitam com agendamentos confirmados; avaliação `rating <= 2` cria alerta `BAD_REVIEW`; Win-back seleciona clientes cujo último `CONCLUDED` ocorreu há exatos 45 dias e sem `CONFIRMED` futuro.
+- `api`: `GET /api/v1/admin/dashboard`; `POST /api/v1/admin/appointments/{id}/no-show`; `GET/POST/PUT/DELETE /api/v1/admin/coupons`; `GET/POST/PUT/DELETE /api/v1/admin/commissions`; `GET /api/v1/admin/commissions/settlement`; `GET/POST/DELETE /api/v1/admin/vacation-blocks`; `GET/PATCH /api/v1/admin/alerts`; `POST /api/v1/admin/campaigns/win-back/run`.
+- `frontend`: `AdminCommandCenter` em `frontend/src/App.tsx`, navegação exclusiva para `ADMIN`.
+- `jobs`: `startWinBackJob()` e endpoint interno `/api/internal/jobs/win-back`.
+- `database_changes`: `backend/prisma/migrations/0005_admin_owner_module/migration.sql`
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-003`, `FEAT-018`, `FEAT-026`, `FEAT-031`, `FEAT-060`
+- `acceptance`: build backend e frontend aprovados; `npm test` backend não executa regressões por ausência de arquivos de teste versionados.
+- `risk`: `HIGH`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -922,6 +949,12 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-011` | Apenas ADMIN/DEV mutam metas; barbeiro tem leitura | `FEAT-061` |
 | `RN-012` | Qualquer barbeiro lê o histórico de notas do cliente; só o autor/admin edita | `FEAT-062` |
 | `RN-013` | Uma avaliação por agendamento concluído | `FEAT-060` |
+| `RN-015` | Cupom e cashback são mutuamente exclusivos no checkout | `FEAT-069` |
+| `RN-016` | Comissão é calculada sobre valor líquido recebido | `FEAT-069` |
+| `RN-017` | No-Show só após 15 minutos e zera a carteira de cashback | `FEAT-069` |
+| `RN-018` | Férias não retroativas conflitam com agendamentos confirmados | `FEAT-033`, `FEAT-069` |
+| `RN-019` | Avaliação com nota menor ou igual a 2 gera alerta administrativo | `FEAT-060`, `FEAT-069` |
+| `RN-020` | Win-back exige último atendimento concluído há exatos 45 dias e nenhum confirmado futuro | `FEAT-069` |
 
 ## 5. Registro de bugs
 
@@ -1164,14 +1197,13 @@ como hotfix.
 | --- | --- | --- |
 | 1 | `FEAT-015` | Remover dependência do pagamento simulado |
 | 2 | `FEAT-005` | Permitir operação real do catálogo |
-| 3 | `FEAT-033` | Permitir gestão real de profissionais e jornadas |
-| 4 | `FEAT-032` | Dar autonomia ao administrador |
-| 5 | `FEAT-028` | Concluir integração WhatsApp de produção |
-| 6 | `FEAT-027` | Concluir Push com provedor real |
-| 7 | `FEAT-034` | Versionar taxa de cashback |
-| 8 | `FEAT-016` | Adicionar cartão com tokenização segura |
-| 9 | `FEAT-045` | Criar console DEV protegido |
-| 10 | `FEAT-046` | Evoluir para múltiplas filiais |
+| 3 | `FEAT-033` | Completar cadastro/edição administrativa de profissionais |
+| 4 | `FEAT-028` | Concluir integração WhatsApp de produção |
+| 5 | `FEAT-027` | Concluir Push com provedor real |
+| 6 | `FEAT-034` | Versionar taxa de cashback |
+| 7 | `FEAT-016` | Adicionar cartão com tokenização segura |
+| 8 | `FEAT-045` | Criar console DEV protegido |
+| 9 | `FEAT-046` | Evoluir para múltiplas filiais |
 
 ## 8. Template de nova funcionalidade
 

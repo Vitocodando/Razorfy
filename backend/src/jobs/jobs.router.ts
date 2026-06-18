@@ -3,6 +3,7 @@ import { config } from '../config';
 import { asyncHandler } from '../common/asyncHandler';
 import { runPaymentHoldExpiration } from './paymentHoldExpiration.job';
 import { processOutbox } from '../notification/outboxProcessor';
+import { runWinBack } from './winBack.job';
 
 // Endpoints internos acionados por agendador externo (Vercel Cron, cron-job.org, pg_cron).
 // O Vercel Cron envia "Authorization: Bearer ${CRON_SECRET}" automaticamente.
@@ -30,7 +31,15 @@ const outbox = asyncHandler(async (_req: Request, res: Response) => {
   res.json({ job: 'process-outbox', sent });
 });
 
+const winBack = asyncHandler(async (req: Request, res: Response) => {
+  const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+  const result = await runWinBack(date);
+  res.json(result);
+});
+
 jobsRouter.get('/expire-holds', expireHolds);
 jobsRouter.post('/expire-holds', expireHolds);
 jobsRouter.get('/process-outbox', outbox);
 jobsRouter.post('/process-outbox', outbox);
+jobsRouter.get('/win-back', winBack);
+jobsRouter.post('/win-back', winBack);

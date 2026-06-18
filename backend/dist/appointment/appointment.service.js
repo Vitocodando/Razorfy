@@ -83,6 +83,11 @@ async function createAppointment(clientId, body) {
     if (new Set(body.serviceIds).size !== body.serviceIds.length) {
         throw new BusinessError_1.BusinessError('DUPLICATE_SERVICES', 'Um serviço não pode ser selecionado mais de uma vez.', 400);
     }
+    const couponCode = normalizeCouponCode(body.couponCode);
+    const requestedCashbackFlag = body.useCashback || Number(body.cashbackAmountToApply ?? 0) > 0;
+    if (couponCode && requestedCashbackFlag) {
+        throw new BusinessError_1.BusinessError('PROMOTION_CONFLICT', 'Cupom de desconto e saldo de cashback não podem ser usados na mesma transação.', 422);
+    }
     return prisma_1.prisma.$transaction(async (tx) => {
         const client = await tx.user.findUnique({ where: { id: clientId } });
         if (!client)
@@ -129,12 +134,24 @@ async function createAppointment(clientId, body) {
         if (blocking) {
             throw new BusinessError_1.BusinessError('SLOT_BLOCKED', 'O horário selecionado está bloqueado pelo profissional.', 409);
         }
+        const appointmentLocalDate = (0, availability_service_1.dateOnlyUtc)((0, availability_service_1.localDateString)(start));
+        const vacation = await tx.vacationBlock.findFirst({
+            where: {
+                barberId: barber.id,
+                startDate: { lte: appointmentLocalDate },
+                endDate: { gte: appointmentLocalDate },
+            },
+        });
+        if (vacation) {
+            throw new BusinessError_1.BusinessError('SLOT_BLOCKED', 'O profissional está em férias no dia selecionado.', 409);
+        }
+        const coupon = couponCode ? await lockAndApplyCoupon(tx, couponCode, total) : null;
         const online = body.paymentMethod !== 'PRESENTIAL';
         const initialStatus = online ? 'PENDING_PAYMENT' : 'CONFIRMED';
         const holdExpiresAt = online
             ? new Date(Date.now() + config_1.config.PAYMENT_HOLD_MINUTES * 60 * 1000)
             : null;
-        const amountPaid = total.minus(requestedCashback).toDecimalPlaces(2);
+        const amountPaid = total.minus(requestedCashback).minus(coupon?.discount ?? 0).toDecimalPlaces(2);
         const appointment = await tx.appointment.create({
             data: {
                 clientId,
@@ -143,6 +160,9 @@ async function createAppointment(clientId, body) {
                 endTimestamp: end,
                 totalPrice: total,
                 cashbackUsed: requestedCashback,
+                couponId: coupon?.id ?? null,
+                couponCode: coupon?.code ?? null,
+                couponDiscount: coupon?.discount ?? new client_1.Prisma.Decimal(0),
                 amountPaid,
                 paymentMethod: body.paymentMethod,
                 status: initialStatus,
@@ -355,6 +375,47 @@ async function cancelOverbookingInTx(tx, appt) {
     await tx.appointment.update({ where: { id: appt.id }, data: { status: 'CANCELLED_OVERBOOKING' } });
     (0, mockGateway_1.refund)(appt.id, appt.paymentReference);
     await auditSvc.statusChanged(tx, appt.id, 'PENDING_PAYMENT', 'CANCELLED_OVERBOOKING', null, { source: 'OVERBOOKING' });
+}
+function normalizeCouponCode(code) {
+    const normalized = code?.trim().toUpperCase();
+    if (!normalized)
+        return null;
+    if (!/^[A-Z0-9]{1,20}$/.test(normalized)) {
+        throw new BusinessError_1.BusinessError('INVALID_COUPON_CODE', 'Código de cupom inválido.', 400);
+    }
+    return normalized;
+}
+async function lockAndApplyCoupon(tx, code, total) {
+    const rows = await tx.$queryRaw `
+    SELECT id,
+           code,
+           discount_type as "discountType",
+           discount_value as "discountValue",
+           max_uses_global as "maxUsesGlobal",
+           current_uses as "currentUses",
+           expires_at as "expiresAt"
+    FROM coupons
+    WHERE code = ${code}
+    FOR UPDATE
+  `;
+    if (rows.length === 0) {
+        throw new BusinessError_1.BusinessError('COUPON_NOT_FOUND', 'Cupom não encontrado.', 404);
+    }
+    const coupon = rows[0];
+    if (coupon.expiresAt <= new Date()) {
+        throw new BusinessError_1.BusinessError('COUPON_EXPIRED', 'Este cupom expirou e não é mais válido.', 422);
+    }
+    if (coupon.maxUsesGlobal !== null && coupon.currentUses >= coupon.maxUsesGlobal) {
+        throw new BusinessError_1.BusinessError('COUPON_LIMIT_REACHED', 'Este cupom esgotou o número máximo de utilizações e não é mais válido.', 422);
+    }
+    const discount = coupon.discountType === 'PERCENTAGE'
+        ? total.mul(coupon.discountValue).div(100).toDecimalPlaces(2, client_1.Prisma.Decimal.ROUND_HALF_UP)
+        : (coupon.discountValue.greaterThan(total) ? total : coupon.discountValue).toDecimalPlaces(2);
+    await tx.coupon.update({
+        where: { id: coupon.id },
+        data: { currentUses: { increment: 1 } },
+    });
+    return { id: coupon.id, code: coupon.code, discount };
 }
 function normalizeCashback(useCashback, amount, servicePrices) {
     if (!useCashback) {

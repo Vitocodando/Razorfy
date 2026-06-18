@@ -6,5 +6,6 @@ export const CreateAppointmentSchema = z.object({
   startTimestamp: z.string().datetime(),
   useCashback: z.boolean().default(false),
   cashbackAmountToApply: z.number().min(0).nullable().optional(),
+  couponCode: z.string().regex(/^[A-Z0-9]{1,20}$/).nullable().optional(),
   paymentMethod: z.enum(['ONLINE_PIX', 'ONLINE_CARD', 'PRESENTIAL']),
 });

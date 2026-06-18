@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.appointmentEvent = appointmentEvent;
 exports.barberCall = barberCall;
 exports.scheduleReminder = scheduleReminder;
+exports.noShowPenalty = noShowPenalty;
+exports.winBack = winBack;
 async function appointmentEvent(tx, appt, eventType) {
     const payload = {
         appointmentId: appt.id,
@@ -56,4 +58,41 @@ async function scheduleReminder(tx, appt) {
         rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType: 'APPOINTMENT_REMINDER', payload, nextAttemptAt: remindAt });
     }
     await tx.notificationOutbox.createMany({ data: rows });
+}
+async function noShowPenalty(tx, appt, deductedAmount) {
+    const payload = {
+        appointmentId: appt.id,
+        clientName: appt.clientName,
+        barberName: appt.barberName,
+        startTimestamp: appt.startTimestamp.toISOString(),
+        deductedAmount,
+        title: 'Reserva marcada como no-show',
+        body: 'Sua reserva foi cancelada por não comparecimento e o saldo de cashback foi zerado conforme a política da barbearia.',
+    };
+    const rows = [
+        { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType: 'NO_SHOW_PENALTY', payload, nextAttemptAt: new Date() },
+    ];
+    if (appt.clientPhone) {
+        rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType: 'NO_SHOW_PENALTY', payload, nextAttemptAt: new Date() });
+    }
+    await tx.notificationOutbox.createMany({ data: rows });
+}
+async function winBack(tx, data) {
+    const payload = {
+        clientId: data.clientId,
+        clientName: data.clientName,
+        lastAppointmentDate: data.lastAppointmentDate,
+        title: 'Sentimos sua falta',
+        body: `${data.clientName}, ja faz 45 dias desde sua ultima visita. Que tal agendar seu proximo horario?`,
+    };
+    await tx.notificationOutbox.create({
+        data: {
+            appointmentId: null,
+            channel: 'WHATSAPP',
+            destination: data.clientPhone,
+            eventType: 'WIN_BACK',
+            payload,
+            nextAttemptAt: new Date(),
+        },
+    });
 }

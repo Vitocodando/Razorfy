@@ -79,3 +79,49 @@ export async function scheduleReminder(tx: Tx, appt: AppointmentData) {
   }
   await tx.notificationOutbox.createMany({ data: rows });
 }
+
+export async function noShowPenalty(
+  tx: Tx,
+  appt: AppointmentData,
+  deductedAmount: string,
+) {
+  const payload: Prisma.InputJsonValue = {
+    appointmentId: appt.id,
+    clientName: appt.clientName,
+    barberName: appt.barberName,
+    startTimestamp: appt.startTimestamp.toISOString(),
+    deductedAmount,
+    title: 'Reserva marcada como no-show',
+    body: 'Sua reserva foi cancelada por não comparecimento e o saldo de cashback foi zerado conforme a política da barbearia.',
+  };
+  const rows: OutboxRow[] = [
+    { appointmentId: appt.id, channel: 'PUSH', destination: appt.clientId, eventType: 'NO_SHOW_PENALTY', payload, nextAttemptAt: new Date() },
+  ];
+  if (appt.clientPhone) {
+    rows.push({ appointmentId: appt.id, channel: 'WHATSAPP', destination: appt.clientPhone, eventType: 'NO_SHOW_PENALTY', payload, nextAttemptAt: new Date() });
+  }
+  await tx.notificationOutbox.createMany({ data: rows });
+}
+
+export async function winBack(
+  tx: Tx,
+  data: { clientId: string; clientName: string; clientPhone: string; lastAppointmentDate: string },
+) {
+  const payload: Prisma.InputJsonValue = {
+    clientId: data.clientId,
+    clientName: data.clientName,
+    lastAppointmentDate: data.lastAppointmentDate,
+    title: 'Sentimos sua falta',
+    body: `${data.clientName}, ja faz 45 dias desde sua ultima visita. Que tal agendar seu proximo horario?`,
+  };
+  await tx.notificationOutbox.create({
+    data: {
+      appointmentId: null,
+      channel: 'WHATSAPP',
+      destination: data.clientPhone,
+      eventType: 'WIN_BACK',
+      payload,
+      nextAttemptAt: new Date(),
+    },
+  });
+}

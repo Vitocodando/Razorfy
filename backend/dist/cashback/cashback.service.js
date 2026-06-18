@@ -6,6 +6,7 @@ exports.debitReserved = debitReserved;
 exports.release = release;
 exports.refund = refund;
 exports.creditEarned = creditEarned;
+exports.penalizeNoShow = penalizeNoShow;
 const client_1 = require("@prisma/client");
 const BusinessError_1 = require("../common/BusinessError");
 async function lockWallet(tx, clientId) {
@@ -78,6 +79,18 @@ async function creditEarned(tx, wallet, appointmentId, amountPaid, cashbackRate)
     wallet.balance = newBalance;
     return earned;
 }
+async function penalizeNoShow(tx, wallet, appointmentId) {
+    const deductedAmount = wallet.balance.toDecimalPlaces(2);
+    if (deductedAmount.equals(0)) {
+        return { deductedAmount, transactionId: null };
+    }
+    const zero = new client_1.Prisma.Decimal(0);
+    await updateWallet(tx, wallet, zero, zero);
+    const transaction = await insertTransaction(tx, wallet.id, appointmentId, 'PENALTY_NO_SHOW', deductedAmount, zero, 'Penalidade por no-show');
+    wallet.balance = zero;
+    wallet.reservedBalance = zero;
+    return { deductedAmount, transactionId: transaction.id };
+}
 async function updateWallet(tx, wallet, newBalance, newReserved) {
     // updateMany com guarda de versão preserva o lock otimista sem passar Decimal por
     // $executeRaw — o engine do Prisma 6.x não serializa Decimal em raw dentro de
@@ -92,7 +105,7 @@ async function updateWallet(tx, wallet, newBalance, newReserved) {
     wallet.version = wallet.version + BigInt(1);
 }
 async function insertTransaction(tx, walletId, appointmentId, type, amount, balanceAfter, description) {
-    await tx.cashbackTransaction.create({
+    return tx.cashbackTransaction.create({
         data: { walletId, appointmentId, type, amount, balanceAfter, description },
     });
 }

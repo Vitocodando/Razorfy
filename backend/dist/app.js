@@ -30,6 +30,7 @@ const jobs_router_1 = require("./jobs/jobs.router");
 const review_router_1 = require("./review/review.router");
 const goal_router_1 = require("./goal/goal.router");
 const crm_router_1 = require("./crm/crm.router");
+const admin_router_1 = require("./admin/admin.router");
 function createApp() {
     const app = (0, express_1.default)();
     app.use((0, cors_1.default)({ origin: config_1.config.CORS_ALLOWED_ORIGIN, credentials: true }));
@@ -40,11 +41,13 @@ function createApp() {
     app.use('/api/v1', schedule_router_1.scheduleRouter);
     app.use('/api/v1/appointments', appointment_router_1.appointmentRouter);
     app.use('/api/v1', wallet_router_1.walletRouter);
+    app.use('/api/v1/payments', payment_router_1.paymentRouter);
     app.use('/api/payments', payment_router_1.paymentRouter);
     app.use('/api/v1', report_router_1.reportRouter);
     app.use('/api/v1', review_router_1.reviewRouter);
     app.use('/api/v1', goal_router_1.goalRouter);
     app.use('/api/v1', crm_router_1.crmRouter);
+    app.use('/api/v1/admin', admin_router_1.adminRouter);
     app.use('/api/internal/jobs', jobs_router_1.jobsRouter);
     app.use(errorHandler_1.errorHandler);
     return app;

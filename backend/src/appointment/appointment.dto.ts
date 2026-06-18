@@ -7,6 +7,8 @@ interface AppointmentWithRelations {
   status: string;
   totalPrice: Prisma.Decimal;
   cashbackUsed: Prisma.Decimal;
+  couponCode?: string | null;
+  couponDiscount?: Prisma.Decimal;
   amountPaid: Prisma.Decimal;
   startTimestamp: Date;
   endTimestamp: Date;
@@ -21,6 +23,8 @@ export function toAppointmentDto(appt: AppointmentWithRelations, paymentPayload:
     status: appt.status,
     totalPrice: appt.totalPrice,
     cashbackUsed: appt.cashbackUsed,
+    couponCode: appt.couponCode ?? null,
+    couponDiscount: appt.couponDiscount ?? new Prisma.Decimal(0),
     amountToPay: appt.amountPaid,
     startTimestamp: appt.startTimestamp,
     endTimestamp: appt.endTimestamp,

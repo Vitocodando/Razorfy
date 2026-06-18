@@ -4,6 +4,7 @@ import { prisma } from './prisma';
 import { devBootstrap } from './config/devBootstrap';
 import { startPaymentHoldExpirationJob } from './jobs/paymentHoldExpiration.job';
 import { startOutboxProcessor } from './notification/outboxProcessor';
+import { startWinBackJob } from './jobs/winBack.job';
 
 async function main() {
   const app = createApp();
@@ -17,6 +18,7 @@ async function main() {
   const jobs = [
     startPaymentHoldExpirationJob(),
     startOutboxProcessor(),
+    startWinBackJob(),
   ];
 
   async function shutdown() {

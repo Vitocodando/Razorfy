@@ -14,12 +14,16 @@ type Appointment = {
   status: string
   startTimestamp: string
   endTimestamp: string
+  barberId?: string
   barberName: string
   clientId?: string
   clientName?: string
+  clientPhone?: string | null
   amountToPay: number
   totalPrice: number
   cashbackUsed: number
+  couponCode?: string | null
+  couponDiscount?: number
   services: { name: string; durationMinutes: number; price: number }[]
 }
 type ExpressBlock = {
@@ -67,6 +71,93 @@ type BarberSlotData = {
   lunchStart: string | null
   lunchEnd: string | null
 }
+type CouponItem = {
+  id: string
+  code: string
+  discountType: 'PERCENTAGE' | 'FIXED_VALUE'
+  discountValue: number
+  maxUsesGlobal: number | null
+  currentUses: number
+  expiresAt: string
+}
+type CommissionRule = {
+  id: string
+  barberId: string
+  serviceId: string
+  commissionPct: number
+  barber?: Barber
+  service?: ServiceItem
+}
+type VacationBlock = {
+  id: string
+  barberId: string
+  startDate: string
+  endDate: string
+  barber?: Barber
+}
+type AdminAlert = {
+  id: string
+  alertType: string
+  status: 'PENDING' | 'RESOLVED'
+  createdAt: string
+  appointment: {
+    appointmentId?: string
+    id?: string
+    client: { id: string; name: string; phone: string | null }
+    barber: { id: string; name: string }
+    services: { serviceName: string; name?: string }[]
+    review?: { rating: number; comment: string | null }
+  }
+}
+type AdminHeatmap = {
+  barberId: string
+  barberName: string
+  workingMinutes: number
+  busyMinutes: number
+  idleMinutes: number
+  occupancyPct: number
+}
+type DailyAdminReport = {
+  reportDate: string
+  grossRevenue: number
+  netRevenue: number
+  concludedAppointments: number
+  noShowAppointments: number
+  averageTicket: number
+  estimatedLtv: number
+  idleMinutes: number
+  occupancyPct: number
+  heatmap: AdminHeatmap[]
+}
+type AdminGrid = {
+  date: string
+  barbers: (Barber & { onVacation: boolean })[]
+  appointments: Appointment[]
+}
+type AdminDashboard = {
+  report: DailyAdminReport
+  alerts: AdminAlert[]
+  grid: AdminGrid
+}
+type CommissionSettlement = {
+  from: string
+  to: string
+  barbers: {
+    barberId: string
+    barberName: string
+    netRevenue: number
+    commissionTotal: number
+    services: {
+      appointmentId: string
+      serviceId: string
+      serviceName: string
+      netAmount: number
+      commissionPct: number
+      commissionAmount: number
+    }[]
+  }[]
+  totals: { netRevenue: number; commissionTotal: number }
+}
 type ApiError = { message?: string }
 
 // ---------- Constantes e utilitários ----------
@@ -108,6 +199,7 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   EXPIRED_PAYMENT: { label: 'Pagamento expirado', color: 'bg-red-100 text-red-800' },
   CANCELLED_OVERBOOKING: { label: 'Cancelado (overbooking)', color: 'bg-red-100 text-red-800' },
   CONCLUDED: { label: 'Concluído', color: 'bg-blue-100 text-blue-800' },
+  NO_SHOW: { label: 'No-show', color: 'bg-red-100 text-red-900' },
 }
 
 const TRANSACTION_META: Record<string, { label: string; icon: string; sign: string; color: string }> = {
@@ -115,6 +207,7 @@ const TRANSACTION_META: Record<string, { label: string; icon: string; sign: stri
   DEBIT: { label: 'Débito', icon: 'remove_circle', sign: '-', color: 'text-red-700' },
   RESERVE: { label: 'Reservado', icon: 'lock', sign: '-', color: 'text-yellow-700' },
   RELEASE: { label: 'Liberado', icon: 'lock_open', sign: '+', color: 'text-yellow-700' },
+  PENALTY_NO_SHOW: { label: 'Penalidade', icon: 'gpp_bad', sign: '-', color: 'text-red-800' },
 }
 
 function dateInputValue(date: Date) {
@@ -177,6 +270,7 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
     const body = (await response.json().catch(() => ({}))) as ApiError
     throw new Error(body.message || 'Não foi possível concluir a solicitação.')
   }
+  if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
@@ -193,7 +287,11 @@ const BARBER_NAV_ITEMS = [
   { key: 'schedule' as const, label: 'Expediente', icon: 'tune' },
 ]
 
-type NavKey = 'home' | 'appointments' | 'wallet' | 'agenda' | 'schedule'
+const ADMIN_NAV_ITEMS = [
+  { key: 'admin' as const, label: 'Comando', icon: 'dashboard' },
+]
+
+type NavKey = 'home' | 'appointments' | 'wallet' | 'agenda' | 'schedule' | 'admin'
 
 type NavItem = { key: NavKey; label: string; icon: string }
 
@@ -405,6 +503,7 @@ function App() {
     const saved = localStorage.getItem('razorfy.session')
     if (!saved) return 'home'
     const parsed = JSON.parse(saved) as Session
+    if (parsed?.user?.role === 'ADMIN') return 'admin'
     return parsed?.user?.role === 'BARBER' ? 'agenda' : 'home'
   })
   const [selectedServices, setSelectedServices] = useState<string[]>([])
@@ -412,7 +511,7 @@ function App() {
   const signIn = (nextSession: Session) => {
     localStorage.setItem('razorfy.session', JSON.stringify(nextSession))
     setSession(nextSession)
-    setNav(nextSession.user.role === 'BARBER' ? 'agenda' : 'home')
+    setNav(nextSession.user.role === 'ADMIN' ? 'admin' : nextSession.user.role === 'BARBER' ? 'agenda' : 'home')
   }
 
   const signOut = () => {
@@ -428,7 +527,6 @@ function App() {
     const onUnauthorized = () => signOut()
     window.addEventListener('razorfy:unauthorized', onUnauthorized)
     return () => window.removeEventListener('razorfy:unauthorized', onUnauthorized)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Callback do OAuth Google: troca o authorization code por sessão.
@@ -446,19 +544,18 @@ function App() {
     window.history.replaceState({}, '', '/')
 
     if (params.get('error')) {
-      setOauth({ exchanging: false, error: 'Login com Google cancelado.' })
+      queueMicrotask(() => setOauth({ exchanging: false, error: 'Login com Google cancelado.' }))
       return
     }
     const code = params.get('code')
     if (!code) return
     if (!savedState || savedState !== params.get('state')) {
-      setOauth({ exchanging: false, error: 'Sessão de login inválida. Tente novamente.' })
+      queueMicrotask(() => setOauth({ exchanging: false, error: 'Sessão de login inválida. Tente novamente.' }))
       return
     }
     request<Session>('/auth/google', { method: 'POST', body: JSON.stringify({ code }) })
       .then((s) => { signIn(s); setOauth({ exchanging: false, error: '' }) })
       .catch((e) => setOauth({ exchanging: false, error: e instanceof Error ? e.message : 'Falha no login com Google.' }))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (oauth.exchanging) {
@@ -484,10 +581,16 @@ function App() {
     )
   }
 
-  const navItems: NavItem[] = session.user.role === 'BARBER' ? BARBER_NAV_ITEMS : CLIENT_NAV_ITEMS
+  const navItems: NavItem[] = session.user.role === 'ADMIN'
+    ? ADMIN_NAV_ITEMS
+    : session.user.role === 'BARBER'
+      ? BARBER_NAV_ITEMS
+      : CLIENT_NAV_ITEMS
 
   const page =
-    nav === 'home' ? (
+    nav === 'admin' ? (
+      <AdminCommandCenter session={session} />
+    ) : nav === 'home' ? (
       <HomePage
         selectedServices={selectedServices}
         onToggleService={(id) =>
@@ -1109,6 +1212,7 @@ function CalendarPage({
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [startTimestamp, setStartTimestamp] = useState('')
   const [useCashback, setUseCashback] = useState(false)
+  const [couponCode, setCouponCode] = useState('')
   const [result, setResult] = useState<Appointment | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -1131,9 +1235,11 @@ function CalendarPage({
 
   useEffect(() => {
     if (!date || !duration || !barbers.length) return
-    setStartTimestamp('')
-    setSlots(new Map())
-    setSlotsLoading(true)
+    queueMicrotask(() => {
+      setStartTimestamp('')
+      setSlots(new Map())
+      setSlotsLoading(true)
+    })
     const candidates = barberId ? barbers.filter((b) => b.id === barberId) : barbers
     Promise.all(
       candidates.map((barber) =>
@@ -1160,6 +1266,7 @@ function CalendarPage({
   const canUseCashback = suggestion.amount > 0
   const cashbackApplied = useCashback ? suggestion.amount : 0
   const finalTotal = Math.max(0, total - cashbackApplied)
+  const normalizedCouponCode = couponCode.trim().toUpperCase()
 
   async function book() {
     if (!startTimestamp) return setError('Escolha um horário disponível.')
@@ -1168,6 +1275,9 @@ function CalendarPage({
     if (!chosenBarberId) return setError('Horário indisponível. Escolha outro.')
     if (useCashback && !canUseCashback) {
       return setError('Saldo de cashback insuficiente para pagar qualquer serviço por completo.')
+    }
+    if (useCashback && normalizedCouponCode) {
+      return setError('Cupom e cashback não podem ser usados no mesmo agendamento.')
     }
     setError('')
     setLoading(true)
@@ -1180,6 +1290,7 @@ function CalendarPage({
           startTimestamp,
           useCashback,
           cashbackAmountToApply: useCashback ? suggestion.amount : null,
+          couponCode: normalizedCouponCode || null,
           paymentMethod: 'PRESENTIAL',
         }),
       }, session.accessToken)
@@ -1206,6 +1317,9 @@ function CalendarPage({
           <div><small className="text-[12px] text-on-surface-variant block">Quando</small><strong className="text-[16px] text-on-surface">{new Date(result.startTimestamp).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</strong></div>
           {result.cashbackUsed > 0 && (
             <div><small className="text-[12px] text-on-surface-variant block">Cashback aplicado</small><strong className="text-[16px] text-green-700">-{money.format(result.cashbackUsed)}</strong></div>
+          )}
+          {(result.couponDiscount ?? 0) > 0 && (
+            <div><small className="text-[12px] text-on-surface-variant block">Cupom {result.couponCode}</small><strong className="text-[16px] text-green-700">-{money.format(result.couponDiscount ?? 0)}</strong></div>
           )}
           <div><small className="text-[12px] text-on-surface-variant block">Valor a pagar</small><strong className="text-[16px] text-on-surface">{money.format(result.amountToPay)}</strong></div>
         </div>
@@ -1324,14 +1438,31 @@ function CalendarPage({
               </div>
             )}
 
+            <div className="bg-surface-container-lowest rounded-xl p-3 border border-on-surface/10">
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-on-surface-variant">Cupom</span>
+                <input
+                  value={couponCode}
+                  onChange={(e) => {
+                    const next = e.target.value.toUpperCase()
+                    setCouponCode(next)
+                    if (next.trim()) setUseCashback(false)
+                  }}
+                  maxLength={20}
+                  placeholder="CLIENTE20"
+                  className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface uppercase focus:outline-none focus:border-secondary"
+                />
+              </label>
+            </div>
+
             {/* Cashback — sugestão paga serviços completos (mais baratos primeiro) */}
             {wallet && wallet.availableBalance > 0 && (
               <div className="bg-surface-container-low rounded-xl p-3 border border-on-surface/10">
-                <label className={`flex items-start gap-3 ${canUseCashback ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                <label className={`flex items-start gap-3 ${canUseCashback && !normalizedCouponCode ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                   <input
                     type="checkbox"
                     checked={useCashback}
-                    disabled={!canUseCashback}
+                    disabled={!canUseCashback || Boolean(normalizedCouponCode)}
                     onChange={(e) => setUseCashback(e.target.checked)}
                     className="w-4 h-4 mt-0.5 accent-primary"
                   />
@@ -1904,6 +2035,494 @@ function ClientNotesModal({
       </div>
     </div>
   )
+}
+
+// ---------- Centro de Comando (ADMIN) ----------
+
+type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations'
+
+function AdminCommandCenter({ session }: { session: Session }) {
+  const token = session.accessToken
+  const [date, setDate] = useState(today())
+  const [tab, setTab] = useState<AdminTab>('overview')
+  const [dashboard, setDashboard] = useState<AdminDashboard | null>(null)
+  const [barbers, setBarbers] = useState<Barber[]>([])
+  const [services, setServices] = useState<ServiceItem[]>([])
+  const [coupons, setCoupons] = useState<CouponItem[]>([])
+  const [commissions, setCommissions] = useState<CommissionRule[]>([])
+  const [vacations, setVacations] = useState<VacationBlock[]>([])
+  const [settlement, setSettlement] = useState<CommissionSettlement | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [couponForm, setCouponForm] = useState({
+    code: '',
+    discountType: 'PERCENTAGE' as 'PERCENTAGE' | 'FIXED_VALUE',
+    discountValue: '10',
+    maxUsesGlobal: '',
+    expiresAt: dateTimeLocalInDays(30),
+  })
+  const [commissionForm, setCommissionForm] = useState({ barberId: '', serviceId: '', commissionPct: '50' })
+  const [vacationForm, setVacationForm] = useState({ barberId: '', startDate: tomorrow(), endDate: tomorrow() })
+
+  async function loadAll(nextDate = date) {
+    setLoading(true)
+    setError('')
+    try {
+      const [dash, barberList, serviceList, couponList, commissionList, vacationList, settlementData] = await Promise.all([
+        request<AdminDashboard>(`/admin/dashboard?date=${nextDate}`, {}, token),
+        request<Barber[]>('/barbers'),
+        request<ServiceItem[]>('/services'),
+        request<CouponItem[]>('/admin/coupons', {}, token),
+        request<CommissionRule[]>('/admin/commissions', {}, token),
+        request<VacationBlock[]>('/admin/vacation-blocks', {}, token),
+        request<CommissionSettlement>(`/admin/commissions/settlement?from=${nextDate}&to=${nextDate}`, {}, token),
+      ])
+      setDashboard(dash)
+      setBarbers(barberList)
+      setServices(serviceList)
+      setCoupons(couponList)
+      setCommissions(commissionList)
+      setVacations(vacationList)
+      setSettlement(settlementData)
+      setCommissionForm((prev) => ({
+        ...prev,
+        barberId: prev.barberId || barberList[0]?.id || '',
+        serviceId: prev.serviceId || serviceList[0]?.id || '',
+      }))
+      setVacationForm((prev) => ({ ...prev, barberId: prev.barberId || barberList[0]?.id || '' }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível carregar o painel administrativo.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      void loadAll()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function reloadDate(nextDate: string) {
+    setDate(nextDate)
+    await loadAll(nextDate)
+  }
+
+  async function createCouponSubmit(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request<CouponItem>('/admin/coupons', {
+        method: 'POST',
+        body: JSON.stringify({
+          code: couponForm.code.trim().toUpperCase(),
+          discountType: couponForm.discountType,
+          discountValue: Number(couponForm.discountValue),
+          maxUsesGlobal: couponForm.maxUsesGlobal ? Number(couponForm.maxUsesGlobal) : null,
+          expiresAt: new Date(couponForm.expiresAt).toISOString(),
+        }),
+      }, token)
+      setSuccess('Cupom criado.')
+      setCouponForm((prev) => ({ ...prev, code: '' }))
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível criar o cupom.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteCoupon(id: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/coupons/${id}`, { method: 'DELETE' }, token)
+      setSuccess('Cupom removido.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível remover o cupom.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveCommission(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request<CommissionRule>('/admin/commissions', {
+        method: 'PUT',
+        body: JSON.stringify({
+          barberId: commissionForm.barberId,
+          serviceId: commissionForm.serviceId,
+          commissionPct: Number(commissionForm.commissionPct),
+        }),
+      }, token)
+      setSuccess('Comissão salva.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível salvar a comissão.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function createVacation(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request<VacationBlock>('/admin/vacation-blocks', {
+        method: 'POST',
+        body: JSON.stringify(vacationForm),
+      }, token)
+      setSuccess('Férias cadastradas.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível cadastrar férias.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteVacation(id: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/vacation-blocks/${id}`, { method: 'DELETE' }, token)
+      setSuccess('Férias removidas.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível remover férias.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function applyNoShow(appointmentId: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/appointments/${appointmentId}/no-show`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Cliente ultrapassou a tolerância limite de 15 minutos e não avisou.' }),
+      }, token)
+      setSuccess('No-show aplicado e carteira zerada quando havia saldo.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível aplicar No-Show.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function resolveAlert(id: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/alerts/${id}/resolve`, { method: 'PATCH' }, token)
+      setSuccess('Alerta resolvido.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível resolver o alerta.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runWinBack() {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const result = await request<{ published: number; skipped: number; failures: number }>('/admin/campaigns/win-back/run', {
+        method: 'POST',
+        body: JSON.stringify({ date }),
+      }, token)
+      setSuccess(`Win-back enfileirado: ${result.published} enviado(s), ${result.skipped} ignorado(s), ${result.failures} falha(s).`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível executar o Win-back.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const report = dashboard?.report
+  const grid = dashboard?.grid
+  const alerts = dashboard?.alerts ?? []
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden">
+        <TopBar title="Comando" right={<Avatar name={session.user.name} size={36} />} />
+      </div>
+      <main className="flex-grow w-full max-w-[1200px] mx-auto px-4 md:px-8 py-4 lg:py-8">
+        <div className="hidden lg:flex items-end justify-between gap-4 mb-5">
+          <div>
+            <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Centro de Comando</h1>
+            <p className="text-[14px] text-on-surface-variant">Visão executiva e ações operacionais do dia.</p>
+          </div>
+          <label className="flex items-center gap-2 text-[12px] font-semibold text-on-surface-variant">
+            <Icon name="calendar_month" className="text-[18px]" />
+            <input type="date" value={date} onChange={(e) => reloadDate(e.target.value)} className="h-10 px-3 bg-surface-container-lowest border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+          </label>
+        </div>
+
+        {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
+        {success && <div className="mb-4"><SuccessBanner message={success} /></div>}
+
+        {loading && !dashboard ? (
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            {[1, 2, 3, 4].map((i) => <div key={i} className="h-28 bg-surface-container-lowest rounded-xl animate-pulse" />)}
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+              <AdminMetric icon="payments" label="Receita líquida" value={money.format(report?.netRevenue ?? 0)} />
+              <AdminMetric icon="receipt_long" label="Ticket médio" value={money.format(report?.averageTicket ?? 0)} />
+              <AdminMetric icon="person_search" label="LTV estimado" value={money.format(report?.estimatedLtv ?? 0)} />
+              <AdminMetric icon="event_busy" label="Ociosidade" value={`${report?.idleMinutes ?? 0} min`} tone={(report?.idleMinutes ?? 0) > 0 ? 'warn' : 'normal'} />
+            </div>
+
+            {alerts.length > 0 && (
+              <div className="mb-4 bg-error-container border border-error/25 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Icon name="warning" filled className="text-error" />
+                  <h2 className="text-[15px] font-bold text-on-error-container">Radar de detratores</h2>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                  {alerts.map((alert) => {
+                    const phone = alert.appointment.client.phone
+                    const whatsapp = phone ? `https://wa.me/${phone.replace(/\D/g, '')}` : null
+                    return (
+                      <div key={alert.id} className="bg-surface-container-lowest border border-error/20 rounded-lg p-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[13px] font-bold text-on-surface truncate">{alert.appointment.client.name}</p>
+                            <p className="text-[12px] text-on-surface-variant truncate">{alert.appointment.barber.name} · {alert.appointment.review?.rating ?? '?'} estrelas</p>
+                          </div>
+                          <button onClick={() => resolveAlert(alert.id)} disabled={saving} className="p-1 text-on-surface-variant hover:text-primary" aria-label="Resolver alerta">
+                            <Icon name="done" className="text-[18px]" />
+                          </button>
+                        </div>
+                        <p className="text-[12px] text-on-surface mt-2">{alert.appointment.review?.comment || 'Sem comentário.'}</p>
+                        {whatsapp && (
+                          <a href={whatsapp} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 mt-2 text-[12px] font-semibold text-secondary">
+                            <Icon name="chat" className="text-[15px]" />
+                            WhatsApp
+                          </a>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2 mb-4 overflow-x-auto">
+              {[
+                { key: 'overview' as const, label: 'Grid', icon: 'view_timeline' },
+                { key: 'coupons' as const, label: 'Cupons', icon: 'sell' },
+                { key: 'commissions' as const, label: 'Repasses', icon: 'percent' },
+                { key: 'vacations' as const, label: 'Férias', icon: 'beach_access' },
+              ].map((item) => (
+                <button key={item.key} onClick={() => setTab(item.key)} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap border transition-colors ${tab === item.key ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-lowest text-on-surface-variant border-on-surface/10 hover:text-on-surface'}`}>
+                  <Icon name={item.icon} className="text-[16px]" />
+                  {item.label}
+                </button>
+              ))}
+            </div>
+
+            {tab === 'overview' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-on-surface/10 flex items-center justify-between">
+                    <h2 className="text-[15px] font-bold text-on-surface">Grid global</h2>
+                    <button onClick={runWinBack} disabled={saving} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-secondary-fixed text-on-secondary-container disabled:opacity-40">
+                      <Icon name="campaign" className="text-[15px]" />
+                      Win-back
+                    </button>
+                  </div>
+                  <div className="divide-y divide-on-surface/10">
+                    {(grid?.appointments ?? []).length === 0 ? (
+                      <p className="p-4 text-[13px] text-on-surface-variant">Nenhum agendamento neste dia.</p>
+                    ) : (
+                      grid!.appointments.map((appt) => (
+                        <div key={appt.appointmentId} className="p-4 flex flex-col md:flex-row md:items-center gap-3">
+                          <div className="w-20 shrink-0">
+                            <p className="text-[18px] font-bold text-on-surface">{timeLabel(appt.startTimestamp)}</p>
+                            <p className="text-[11px] text-on-surface-variant">{timeLabel(appt.endTimestamp)}</p>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="text-[14px] font-bold text-on-surface truncate">{appt.clientName ?? 'Cliente'}</p>
+                              <StatusBadge status={appt.status} />
+                            </div>
+                            <p className="text-[12px] text-on-surface-variant truncate">{appt.barberName} · {appt.services.map((s) => s.name).join(', ')}</p>
+                          </div>
+                          <div className="flex items-center gap-2 justify-between md:justify-end">
+                            <span className="text-[13px] font-bold text-on-surface">{money.format(appt.amountToPay)}</span>
+                            {appt.status === 'CONFIRMED' && (
+                              <button onClick={() => applyNoShow(appt.appointmentId)} disabled={saving} className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-[12px] font-semibold text-error border border-error/35 hover:bg-error-container disabled:opacity-40">
+                                <Icon name="person_cancel" className="text-[15px]" />
+                                No-show
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+                  <h2 className="text-[15px] font-bold text-on-surface mb-3">Mapa de ociosidade</h2>
+                  <div className="flex flex-col gap-3">
+                    {(report?.heatmap ?? []).map((row) => (
+                      <div key={row.barberId}>
+                        <div className="flex justify-between text-[12px] mb-1">
+                          <span className="font-semibold text-on-surface">{row.barberName}</span>
+                          <span className="text-on-surface-variant">{row.occupancyPct}%</span>
+                        </div>
+                        <div className="h-2 bg-surface-container-high rounded-full overflow-hidden">
+                          <div className="h-full bg-secondary rounded-full" style={{ width: `${Math.min(row.occupancyPct, 100)}%` }} />
+                        </div>
+                        <p className="text-[11px] text-on-surface-variant mt-1">{row.idleMinutes} min livres</p>
+                      </div>
+                    ))}
+                    {(grid?.barbers ?? []).filter((b) => b.onVacation).map((barber) => (
+                      <p key={barber.id} className="inline-flex items-center gap-1 text-[12px] text-on-surface-variant">
+                        <Icon name="beach_access" className="text-[15px]" />
+                        {barber.name} em férias
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === 'coupons' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                <form onSubmit={createCouponSubmit} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+                  <h2 className="text-[15px] font-bold text-on-surface">Novo cupom</h2>
+                  <input value={couponForm.code} onChange={(e) => setCouponForm((p) => ({ ...p, code: e.target.value.toUpperCase() }))} placeholder="CLIENTE20" className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <select value={couponForm.discountType} onChange={(e) => setCouponForm((p) => ({ ...p, discountType: e.target.value as 'PERCENTAGE' | 'FIXED_VALUE' }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
+                    <option value="PERCENTAGE">Percentual</option>
+                    <option value="FIXED_VALUE">Valor fixo</option>
+                  </select>
+                  <input type="number" min="0.01" step="0.01" value={couponForm.discountValue} onChange={(e) => setCouponForm((p) => ({ ...p, discountValue: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input type="number" min="1" value={couponForm.maxUsesGlobal} onChange={(e) => setCouponForm((p) => ({ ...p, maxUsesGlobal: e.target.value }))} placeholder="Limite global opcional" className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input type="datetime-local" value={couponForm.expiresAt} onChange={(e) => setCouponForm((p) => ({ ...p, expiresAt: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <button disabled={saving || !couponForm.code} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Criar</button>
+                </form>
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  {coupons.map((coupon) => (
+                    <div key={coupon.id} className="p-4 border-b last:border-b-0 border-on-surface/10 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[14px] font-bold text-on-surface">{coupon.code}</p>
+                        <p className="text-[12px] text-on-surface-variant">{coupon.discountType === 'PERCENTAGE' ? `${coupon.discountValue}%` : money.format(coupon.discountValue)} · {coupon.currentUses}/{coupon.maxUsesGlobal ?? '∞'} usos · vence {new Date(coupon.expiresAt).toLocaleDateString('pt-BR')}</p>
+                      </div>
+                      <button onClick={() => deleteCoupon(coupon.id)} disabled={saving} className="p-2 text-on-surface-variant hover:text-error" aria-label="Remover cupom"><Icon name="delete" /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'commissions' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                <form onSubmit={saveCommission} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+                  <h2 className="text-[15px] font-bold text-on-surface">Regra de repasse</h2>
+                  <select value={commissionForm.barberId} onChange={(e) => setCommissionForm((p) => ({ ...p, barberId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
+                    {barbers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <select value={commissionForm.serviceId} onChange={(e) => setCommissionForm((p) => ({ ...p, serviceId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
+                    {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  <input type="number" min="0" max="100" step="0.01" value={commissionForm.commissionPct} onChange={(e) => setCommissionForm((p) => ({ ...p, commissionPct: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <button disabled={saving || !commissionForm.barberId || !commissionForm.serviceId} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Salvar</button>
+                </form>
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-[15px] font-bold text-on-surface">Acerto do dia</h2>
+                    <span className="text-[13px] font-bold text-primary">{money.format(settlement?.totals.commissionTotal ?? 0)}</span>
+                  </div>
+                  <div className="flex flex-col gap-3">
+                    {settlement?.barbers.map((barber) => (
+                      <div key={barber.barberId} className="border border-on-surface/10 rounded-lg p-3">
+                        <div className="flex justify-between gap-2">
+                          <p className="text-[13px] font-bold text-on-surface">{barber.barberName}</p>
+                          <p className="text-[13px] font-bold text-on-surface">{money.format(barber.commissionTotal)}</p>
+                        </div>
+                        <p className="text-[11px] text-on-surface-variant">Base líquida {money.format(barber.netRevenue)}</p>
+                      </div>
+                    ))}
+                    {commissions.map((rule) => (
+                      <p key={rule.id} className="text-[12px] text-on-surface-variant flex justify-between gap-2 py-1 border-t border-on-surface/10 first:border-t-0">
+                        <span>{rule.barber?.name} · {rule.service?.name}</span>
+                        <span className="font-semibold">{rule.commissionPct}%</span>
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {tab === 'vacations' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                <form onSubmit={createVacation} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+                  <h2 className="text-[15px] font-bold text-on-surface">Bloquear férias</h2>
+                  <select value={vacationForm.barberId} onChange={(e) => setVacationForm((p) => ({ ...p, barberId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
+                    {barbers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                  <input type="date" value={vacationForm.startDate} onChange={(e) => setVacationForm((p) => ({ ...p, startDate: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input type="date" value={vacationForm.endDate} onChange={(e) => setVacationForm((p) => ({ ...p, endDate: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <button disabled={saving || !vacationForm.barberId} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Cadastrar</button>
+                </form>
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  {vacations.length === 0 ? (
+                    <p className="p-4 text-[13px] text-on-surface-variant">Nenhum bloqueio de férias.</p>
+                  ) : vacations.map((block) => (
+                    <div key={block.id} className="p-4 border-b last:border-b-0 border-on-surface/10 flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[14px] font-bold text-on-surface">{block.barber?.name ?? 'Barbeiro'}</p>
+                        <p className="text-[12px] text-on-surface-variant">{dateOnlyLabel(block.startDate)} até {dateOnlyLabel(block.endDate)}</p>
+                      </div>
+                      <button onClick={() => deleteVacation(block.id)} disabled={saving} className="p-2 text-on-surface-variant hover:text-error" aria-label="Remover férias"><Icon name="delete" /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function AdminMetric({ icon, label, value, tone = 'normal' }: { icon: string; label: string; value: string; tone?: 'normal' | 'warn' }) {
+  return (
+    <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+      <div className="flex items-center gap-2 text-on-surface-variant mb-2">
+        <Icon name={icon} className={`text-[18px] ${tone === 'warn' ? 'text-error' : 'text-secondary'}`} />
+        <span className="text-[11px] font-semibold">{label}</span>
+      </div>
+      <p className="text-[22px] font-bold text-on-surface tracking-tight">{value}</p>
+    </div>
+  )
+}
+
+function timeLabel(timestamp: string) {
+  return new Date(timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+}
+
+function dateOnlyLabel(value: string) {
+  const day = value.slice(0, 10)
+  return new Date(`${day}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
+}
+
+function dateTimeLocalInDays(days: number) {
+  const date = new Date()
+  date.setDate(date.getDate() + days)
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
+  return date.toISOString().slice(0, 16)
 }
 
 // ---------- Configuração de Expediente (BARBER) ----------

@@ -8,5 +8,6 @@ exports.CreateAppointmentSchema = zod_1.z.object({
     startTimestamp: zod_1.z.string().datetime(),
     useCashback: zod_1.z.boolean().default(false),
     cashbackAmountToApply: zod_1.z.number().min(0).nullable().optional(),
+    couponCode: zod_1.z.string().regex(/^[A-Z0-9]{1,20}$/).nullable().optional(),
     paymentMethod: zod_1.z.enum(['ONLINE_PIX', 'ONLINE_CARD', 'PRESENTIAL']),
 });

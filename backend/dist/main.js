@@ -6,6 +6,7 @@ const prisma_1 = require("./prisma");
 const devBootstrap_1 = require("./config/devBootstrap");
 const paymentHoldExpiration_job_1 = require("./jobs/paymentHoldExpiration.job");
 const outboxProcessor_1 = require("./notification/outboxProcessor");
+const winBack_job_1 = require("./jobs/winBack.job");
 async function main() {
     const app = (0, app_1.createApp)();
     await (0, devBootstrap_1.devBootstrap)();
@@ -15,6 +16,7 @@ async function main() {
     const jobs = [
         (0, paymentHoldExpiration_job_1.startPaymentHoldExpirationJob)(),
         (0, outboxProcessor_1.startOutboxProcessor)(),
+        (0, winBack_job_1.startWinBackJob)(),
     ];
     async function shutdown() {
         console.log('[razorfy] encerrando...');

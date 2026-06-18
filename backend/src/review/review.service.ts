@@ -17,14 +17,28 @@ export async function createReview(clientId: string, data: { appointmentId: stri
   }
 
   // barberId/clientId derivados do agendamento (não confia no corpo da requisição).
-  return prisma.review.create({
-    data: {
-      appointmentId: appt.id,
-      barberId: appt.barberId,
-      clientId: appt.clientId,
-      rating: data.rating,
-      comment: data.comment?.trim() || null,
-    },
+  return prisma.$transaction(async tx => {
+    const review = await tx.review.create({
+      data: {
+        appointmentId: appt.id,
+        barberId: appt.barberId,
+        clientId: appt.clientId,
+        rating: data.rating,
+        comment: data.comment?.trim() || null,
+      },
+    });
+
+    if (data.rating <= 2) {
+      await tx.adminAlert.create({
+        data: {
+          appointmentId: appt.id,
+          alertType: 'BAD_REVIEW',
+          status: 'PENDING',
+        },
+      });
+    }
+
+    return review;
   });
 }
 

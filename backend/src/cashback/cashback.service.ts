@@ -112,6 +112,32 @@ export async function creditEarned(
   return earned;
 }
 
+export async function penalizeNoShow(
+  tx: Tx,
+  wallet: WalletRow,
+  appointmentId: string,
+): Promise<{ deductedAmount: Prisma.Decimal; transactionId: string | null }> {
+  const deductedAmount = wallet.balance.toDecimalPlaces(2);
+  if (deductedAmount.equals(0)) {
+    return { deductedAmount, transactionId: null };
+  }
+
+  const zero = new Prisma.Decimal(0);
+  await updateWallet(tx, wallet, zero, zero);
+  const transaction = await insertTransaction(
+    tx,
+    wallet.id,
+    appointmentId,
+    'PENALTY_NO_SHOW',
+    deductedAmount,
+    zero,
+    'Penalidade por no-show',
+  );
+  wallet.balance = zero;
+  wallet.reservedBalance = zero;
+  return { deductedAmount, transactionId: transaction.id };
+}
+
 async function updateWallet(
   tx: Tx,
   wallet: WalletRow,
@@ -140,7 +166,7 @@ async function insertTransaction(
   balanceAfter: Prisma.Decimal,
   description: string,
 ) {
-  await tx.cashbackTransaction.create({
+  return tx.cashbackTransaction.create({
     data: { walletId, appointmentId, type, amount, balanceAfter, description },
   });
 }

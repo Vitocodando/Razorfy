@@ -14,6 +14,14 @@ export async function processOutbox(): Promise<number> {
   let sent = 0;
   for (const msg of messages) {
     try {
+      // RN03: respeita o consentimento de notificação do destinatário; canal desligado é descartado.
+      if (!(await channelAllowed(msg))) {
+        await prisma.notificationOutbox.update({
+          where: { id: msg.id },
+          data: { status: 'SENT', sentAt: new Date(), lastError: 'skipped: channel disabled by user', attempts: { increment: 1 } },
+        });
+        continue;
+      }
       await send(msg);
       await prisma.notificationOutbox.update({
         where: { id: msg.id },
@@ -49,6 +57,23 @@ export function startOutboxProcessor(): ReturnType<typeof setInterval> {
       console.error('[outbox] erro no processador:', err);
     }
   }, 5_000);
+}
+
+async function channelAllowed(msg: { channel: string; destination: string }): Promise<boolean> {
+  if (msg.channel === 'PUSH') {
+    const u = await prisma.user
+      .findUnique({ where: { id: msg.destination }, select: { notificationPushEnabled: true } })
+      .catch(() => null);
+    return u ? u.notificationPushEnabled : true;
+  }
+  if (msg.channel === 'WHATSAPP') {
+    const u = await prisma.user.findFirst({
+      where: { phone: msg.destination },
+      select: { notificationWhatsappEnabled: true },
+    });
+    return u ? u.notificationWhatsappEnabled : true;
+  }
+  return true;
 }
 
 async function send(msg: { channel: string; destination: string; eventType: string; payload: unknown }) {

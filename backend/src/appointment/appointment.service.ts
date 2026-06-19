@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { config } from '../config';
+import * as settingsSvc from '../settings/settings.service';
 import { BusinessError } from '../common/BusinessError';
 import { assertWorkingTime, dateOnlyUtc, localDateString } from '../schedule/availability.service';
 import * as cashbackSvc from '../cashback/cashback.service';
@@ -72,11 +73,14 @@ export async function createAppointment(clientId: string, body: {
     }
 
     // Lock barber row
-    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string; name: string }>>`
-      SELECT id, role, name FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
+    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string; name: string; is_active: boolean }>>`
+      SELECT id, role, name, is_active FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
     `;
     if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
       throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+    }
+    if (!barberRows[0].is_active) {
+      throw new BusinessError('BARBER_INACTIVE', 'Este profissional não está disponível para novos agendamentos.', 422);
     }
     const barber = barberRows[0];
 
@@ -304,8 +308,9 @@ export async function concludeAppointment(appointmentId: string, actorId: string
     }
 
     const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
-    // Cashback = 10% sobre o valor efetivamente pago em dinheiro (amountPaid); valor pago com cashback não gera novo cashback.
-    const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, config.CASHBACK_RATE);
+    // Taxa de cashback parametrizável (global_settings); incide sobre o valor pago em dinheiro.
+    const cashbackRate = await settingsSvc.getCashbackRate();
+    const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, cashbackRate);
 
     const updated = await tx.appointment.update({
       where: { id: appt.id },

@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-18T00:00:00
+last_updated: 2026-06-19T16:20:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -931,6 +931,59 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `HIGH`
 - `target_release`: `UNRELEASED`
 
+### FEAT-070 - Gestão de barbeiros e serviços (soft-delete)
+
+- `status`: `IMPLEMENTED`
+- `area`: `ADMIN`
+- `actors`: `ADMIN`
+- `description`: Painéis do Admin para listar e governar o quadro de barbeiros e o catálogo de serviços, com inativação por soft-delete (preserva histórico financeiro).
+- `business_rules`: **RN06** — sem `DELETE` físico; inativação via flag (`users.is_active` / `services.active`). **RN07** — listagem do Admin ignora filtro de ativação (retorna ativos + inativos); cliente continua vendo só ativos. **RN08** — ao inativar barbeiro, retorna `orphanedAppointments` (futuros `CONFIRMED` a realocar). **V05** — não ativa serviço com nome igual a outro já ativo (`DUPLICATE_ACTIVE_SERVICE`). **V06** — não altera status de usuário `ADMIN` (`CANNOT_MODIFY_ADMIN`). Barbeiro/serviço inativo é rejeitado em novos agendamentos (`BARBER_INACTIVE` / `SERVICE_NOT_FOUND`). Toda alteração gera log de auditoria (`admin_audit`).
+- `api`: `GET /api/v1/admin/barbers`, `PATCH /api/v1/admin/barbers/{id}/status`, `GET /api/v1/admin/services`, `PATCH /api/v1/admin/services/{id}/status`.
+- `frontend`: painéis "Barbeiros" e "Serviços" no `AdminCommandCenter` (`frontend/src/App.tsx`).
+- `database_changes`: `0006_admin_soft_delete` (`users.is_active`; `services.active` reutilizado).
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-003`, `FEAT-004`, `FEAT-006`, `FEAT-069`
+- `acceptance`: Admin lista todos (ativos+inativos) com contadores; inativar barbeiro/serviço some do app do cliente e barra novos agendamentos; histórico preservado; ADMIN não pode ser alterado.
+- `tests`: build backend ✓ e smoke HTTP — listas, toggle, filtro público, RBAC `403`, `CANNOT_MODIFY_ADMIN`, soft-delete preservando contadores.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-071 - Criação e deleção física de barbeiros e serviços (Admin)
+
+- `status`: `IMPLEMENTED`
+- `area`: `ADMIN`
+- `actors`: `ADMIN`
+- `description`: O Admin cria barbeiros (com senha provisória) e serviços, e exclui fisicamente (hard-delete) apenas registros sem histórico; registros com agendamentos só podem ser inativados (soft-delete, `FEAT-070`).
+- `business_rules`: **RN01** — hard-delete só com zero `appointments` atrelados (`ENTITY_IN_USE 409` + `suggestion` de inativação caso contrário); a deleção limpa em transação as linhas próprias (slots, blocos, férias, metas, comissões, reviews, notas autoradas para barbeiro; comissões para serviço). **RN02** — senha inicial criptografada com BCrypt (custo 12). **RN03** — e-mail/telefone de barbeiro únicos (`DUPLICATE_EMAIL`/`DUPLICATE_PHONE`); nome de serviço único case-insensitive (`DUPLICATE_SERVICE_NAME`). **V01** — payload de criação de barbeiro não aceita `role`; backend força `BARBER` (anti privilege-escalation). **V02** — contagem de agendamentos antes do delete. ADMIN não pode ser excluído (`CANNOT_MODIFY_ADMIN`). FKs em `appointments` permanecem `RESTRICT` (guardião do banco). Toda ação gera `admin_audit`.
+- `api`: `POST /api/v1/admin/barbers`, `DELETE /api/v1/admin/barbers/{id}`, `POST /api/v1/admin/services`, `DELETE /api/v1/admin/services/{id}`.
+- `frontend`: formulários "Novo barbeiro"/"Novo serviço" + botão de exclusão (visível só quando contador = 0) nas abas Barbeiros/Serviços do `AdminCommandCenter`.
+- `database_changes`: `NONE` (reusa tabelas existentes).
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-001`, `FEAT-070`
+- `acceptance`: criar barbeiro/serviço → 201; e-mail/nome duplicado → 422; hard-delete sem histórico → 204; com histórico → 409 `ENTITY_IN_USE` + `suggestion`; barbeiro criado nasce `BARBER`/ativo e disponível no app do cliente.
+- `tests`: build backend/web ✓; smoke HTTP — criação, duplicidade (email + nome CI), hard-delete 204, `ENTITY_IN_USE` em barbeiro e serviço com histórico.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-072 - Módulo de Configurações (conta, segurança, LGPD e parâmetros globais)
+
+- `status`: `IMPLEMENTED`
+- `area`: `SETTINGS`
+- `actors`: `CLIENT`, `BARBER`, `ADMIN`
+- `description`: Central de conta por role — edição de perfil (nome/telefone), toggles de notificação (push/WhatsApp) e troca de senha para todos; exclusão de conta com anonimização LGPD para clientes; e parametrização global (tolerância de No-Show e taxa de cashback) exclusiva do Admin.
+- `business_rules`: **RN01** — exclusão de cliente é soft-delete + anonimização: `is_active=false`, `is_anonymized=true`, nome "Cliente Anônimo", e-mail/telefone substituídos por valores aleatórios (V03), senha vira hash inutilizável (satisfaz `chk_users_auth_method`), carteira de cashback zerada. **RN02** — bloqueia exclusão se houver agendamento futuro `CONFIRMED`/`PENDING_PAYMENT` (`HAS_PENDING_APPOINTMENTS`). **RN03** — outbox respeita `notification_*_enabled` (push e WhatsApp); win-back filtra clientes com WhatsApp ligado, ativos e não anonimizados. **RN04/V02** — troca de senha e exclusão exigem `currentPassword` válido (`CURRENT_PASSWORD_INVALID`); nova senha ≠ atual (`SAME_PASSWORD`). **V01** — `global_settings` é singleton (id=1) com cache em memória invalidado no `PUT`. E-mail não é editável; `user_id` vem sempre do JWT (anti-IDOR).
+- `api`: `GET/PATCH /api/v1/users/me`, `PUT /api/v1/users/me/password`, `DELETE /api/v1/users/me`; `GET/PUT /api/v1/admin/global-settings`.
+- `frontend`: `SettingsPage` (aba "Conta" para CLIENT/BARBER: perfil, notificações, senha, excluir conta) e aba "Regras" no `AdminCommandCenter` (`frontend/src/App.tsx`).
+- `database_changes`: `0007_settings_module` — `users.notification_push_enabled`, `users.notification_whatsapp_enabled`, `users.is_anonymized`; tabela `global_settings` (singleton com seed id=1).
+- `wiring`: No-Show lê `noShowToleranceMinutes` do settings (antes const 15); crédito de cashback lê `defaultCashbackPct` (antes `CASHBACK_RATE` do env).
+- `api_compatibility`: `COMPATIBLE`
+- `depends_on`: `FEAT-002`, `FEAT-018`, `FEAT-026`, `FEAT-069`
+- `acceptance`: usuário edita perfil/notificações e troca senha; cliente sem agendamento futuro exclui conta → anonimizado e deslogado; com agendamento futuro → `422 HAS_PENDING_APPOINTMENTS`; Admin altera tolerância/cashback com efeito imediato.
+- `tests`: builds backend/web ✓; smoke HTTP — `global-settings` GET/PUT + validação (5–60) + RBAC 403; `PATCH /me` toggles; `PUT password` válida 204; anonimização verificada no banco (nome/PII mascarados, `is_active=false`).
+- `notes`: invalidação de sessões ativas pós-troca de senha (§16) fora de escopo — JWT é stateless e não há refresh tokens.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -955,6 +1008,14 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-018` | Férias não retroativas conflitam com agendamentos confirmados | `FEAT-033`, `FEAT-069` |
 | `RN-019` | Avaliação com nota menor ou igual a 2 gera alerta administrativo | `FEAT-060`, `FEAT-069` |
 | `RN-020` | Win-back exige último atendimento concluído há exatos 45 dias e nenhum confirmado futuro | `FEAT-069` |
+| `RN-021` | Barbeiros e serviços com histórico nunca são deletados fisicamente — apenas soft-delete (`is_active=false`) | `FEAT-070` |
+| `RN-022` | Listagem do Admin retorna ativos + inativos; cliente vê só ativos | `FEAT-070` |
+| `RN-023` | Inativar barbeiro alerta sobre agendamentos futuros confirmados; status de ADMIN é imutável | `FEAT-070` |
+| `RN-024` | Hard-delete de barbeiro/serviço só com zero agendamentos; caso contrário `ENTITY_IN_USE` (inativar) | `FEAT-071` |
+| `RN-025` | Criação de barbeiro força role `BARBER` (anti privilege-escalation) e senha BCrypt; e-mail/telefone/nome de serviço únicos | `FEAT-071` |
+| `RN-026` | Exclusão de cliente é anonimização LGPD (soft-delete + PII mascarado + carteira zerada); bloqueada com agendamento futuro | `FEAT-072` |
+| `RN-027` | Notificações respeitam consentimento (`notification_*_enabled`); canal desligado não dispara (inclui win-back) | `FEAT-072` |
+| `RN-028` | Parâmetros globais (no-show, cashback) são singleton com cache; mutação exclusiva do Admin com efeito imediato | `FEAT-072` |
 
 ## 5. Registro de bugs
 

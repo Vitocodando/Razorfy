@@ -27,6 +27,7 @@ import { reviewRouter } from './review/review.router';
 import { goalRouter } from './goal/goal.router';
 import { crmRouter } from './crm/crm.router';
 import { adminRouter } from './admin/admin.router';
+import { userRouter } from './user/user.router';
 
 export function createApp() {
   const app = express();
@@ -48,6 +49,7 @@ export function createApp() {
   app.use('/api/v1', goalRouter);
   app.use('/api/v1', crmRouter);
   app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1/users', userRouter);
   app.use('/api/internal/jobs', jobsRouter);
 
   app.use(errorHandler);

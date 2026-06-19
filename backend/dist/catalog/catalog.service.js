@@ -11,7 +11,7 @@ async function findActiveServices() {
 }
 async function findBarbers() {
     return prisma_1.prisma.user.findMany({
-        where: { role: 'BARBER' },
+        where: { role: 'BARBER', isActive: true },
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
     });

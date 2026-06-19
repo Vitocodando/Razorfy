@@ -44,6 +44,7 @@ exports.callClient = callClient;
 const client_1 = require("@prisma/client");
 const prisma_1 = require("../prisma");
 const config_1 = require("../config");
+const settingsSvc = __importStar(require("../settings/settings.service"));
 const BusinessError_1 = require("../common/BusinessError");
 const availability_service_1 = require("../schedule/availability.service");
 const cashbackSvc = __importStar(require("../cashback/cashback.service"));
@@ -97,10 +98,13 @@ async function createAppointment(clientId, body) {
         }
         // Lock barber row
         const barberRows = await tx.$queryRaw `
-      SELECT id, role, name FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
+      SELECT id, role, name, is_active FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
     `;
         if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
             throw new BusinessError_1.BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+        }
+        if (!barberRows[0].is_active) {
+            throw new BusinessError_1.BusinessError('BARBER_INACTIVE', 'Este profissional não está disponível para novos agendamentos.', 422);
         }
         const barber = barberRows[0];
         const selectedServices = await tx.service.findMany({
@@ -298,8 +302,9 @@ async function concludeAppointment(appointmentId, actorId) {
             throw new BusinessError_1.BusinessError('INVALID_APPOINTMENT_STATE', 'Apenas agendamentos confirmados podem ser concluídos.', 422);
         }
         const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
-        // Cashback = 10% sobre o valor efetivamente pago em dinheiro (amountPaid); valor pago com cashback não gera novo cashback.
-        const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, config_1.config.CASHBACK_RATE);
+        // Taxa de cashback parametrizável (global_settings); incide sobre o valor pago em dinheiro.
+        const cashbackRate = await settingsSvc.getCashbackRate();
+        const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, cashbackRate);
         const updated = await tx.appointment.update({
             where: { id: appt.id },
             data: { status: 'CONCLUDED', cashbackCredited: true },

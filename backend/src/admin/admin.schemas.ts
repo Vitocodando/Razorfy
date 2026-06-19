@@ -32,6 +32,29 @@ export const NoShowSchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
+export const StatusSchema = z.object({
+  isActive: z.boolean(),
+});
+
+// V01: sem campo `role` no payload — o backend força BARBER.
+export const CreateBarberSchema = z.object({
+  name: z.string().trim().min(3).max(100),
+  email: z.string().trim().toLowerCase().email().max(150),
+  phone: z.string().trim().regex(/^\+?[1-9]\d{1,14}$/).max(20),
+  initialPassword: z.string().min(6).max(100),
+});
+
+export const CreateServiceSchema = z.object({
+  name: z.string().trim().min(1).max(50),
+  durationMinutes: z.number().int().positive(),
+  price: z.number().min(0),
+});
+
+export const GlobalSettingsSchema = z.object({
+  noShowToleranceMinutes: z.number().int().min(5).max(60),
+  defaultCashbackPct: z.number().min(0).max(100),
+});
+
 export const DateQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });

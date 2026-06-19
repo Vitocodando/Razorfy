@@ -6,15 +6,25 @@ import { requireStrictAdmin } from './admin.middleware';
 import {
   CouponSchema,
   CommissionSchema,
+  CreateBarberSchema,
+  CreateServiceSchema,
+  GlobalSettingsSchema,
   DateQuerySchema,
   NoShowSchema,
   RangeQuerySchema,
+  StatusSchema,
   VacationBlockSchema,
 } from './admin.schemas';
 import {
   applyNoShow,
+  createBarber,
   createCoupon,
+  createService,
   createVacationBlock,
+  deleteBarber,
+  deleteService,
+  getGlobalSettings,
+  updateGlobalSettings,
   deleteCommission,
   deleteCoupon,
   deleteVacationBlock,
@@ -22,12 +32,16 @@ import {
   getDashboard,
   getGlobalGrid,
   listAdminAlerts,
+  listBarbersAdmin,
   listCommissions,
   listCoupons,
+  listServicesAdmin,
   listVacationBlocks,
   refreshDailyReport,
   resolveAdminAlert,
   runWinBackCampaign,
+  setBarberStatus,
+  setServiceStatus,
   updateCoupon,
   upsertCommission,
 } from './admin.service';
@@ -118,6 +132,60 @@ adminRouter.delete('/vacation-blocks/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
   await deleteVacationBlock(req.user!.id, id);
   res.status(204).end();
+}));
+
+// Gestão de barbeiros (RF06/RF08 + criação/deleção)
+adminRouter.get('/barbers', asyncHandler(async (_req, res) => {
+  res.json(await listBarbersAdmin());
+}));
+
+adminRouter.post('/barbers', asyncHandler(async (req, res) => {
+  const body = CreateBarberSchema.parse(req.body);
+  res.status(201).json(await createBarber(req.user!.id, body));
+}));
+
+adminRouter.patch('/barbers/:id/status', asyncHandler(async (req, res) => {
+  const id = UuidParam.parse(req.params.id);
+  const { isActive } = StatusSchema.parse(req.body);
+  res.json(await setBarberStatus(req.user!.id, id, isActive));
+}));
+
+adminRouter.delete('/barbers/:id', asyncHandler(async (req, res) => {
+  const id = UuidParam.parse(req.params.id);
+  await deleteBarber(req.user!.id, id);
+  res.status(204).end();
+}));
+
+// Gestão de catálogo (RF07/RF08 + criação/deleção)
+adminRouter.get('/services', asyncHandler(async (_req, res) => {
+  res.json(await listServicesAdmin());
+}));
+
+adminRouter.post('/services', asyncHandler(async (req, res) => {
+  const body = CreateServiceSchema.parse(req.body);
+  res.status(201).json(await createService(req.user!.id, body));
+}));
+
+adminRouter.patch('/services/:id/status', asyncHandler(async (req, res) => {
+  const id = UuidParam.parse(req.params.id);
+  const { isActive } = StatusSchema.parse(req.body);
+  res.json(await setServiceStatus(req.user!.id, id, isActive));
+}));
+
+adminRouter.delete('/services/:id', asyncHandler(async (req, res) => {
+  const id = UuidParam.parse(req.params.id);
+  await deleteService(req.user!.id, id);
+  res.status(204).end();
+}));
+
+// Configurações globais (RF04) — cache invalidado no PUT
+adminRouter.get('/global-settings', asyncHandler(async (_req, res) => {
+  res.json(await getGlobalSettings());
+}));
+
+adminRouter.put('/global-settings', asyncHandler(async (req, res) => {
+  const body = GlobalSettingsSchema.parse(req.body);
+  res.json(await updateGlobalSettings(req.user!.id, body));
 }));
 
 adminRouter.get('/alerts', asyncHandler(async (req, res) => {

@@ -280,18 +280,20 @@ const CLIENT_NAV_ITEMS = [
   { key: 'home' as const, label: 'Início', icon: 'home' },
   { key: 'appointments' as const, label: 'Meus Horários', icon: 'event' },
   { key: 'wallet' as const, label: 'Carteira', icon: 'account_balance_wallet' },
+  { key: 'settings' as const, label: 'Conta', icon: 'settings' },
 ]
 
 const BARBER_NAV_ITEMS = [
   { key: 'agenda' as const, label: 'Agenda', icon: 'calendar_today' },
   { key: 'schedule' as const, label: 'Expediente', icon: 'tune' },
+  { key: 'settings' as const, label: 'Conta', icon: 'settings' },
 ]
 
 const ADMIN_NAV_ITEMS = [
   { key: 'admin' as const, label: 'Comando', icon: 'dashboard' },
 ]
 
-type NavKey = 'home' | 'appointments' | 'wallet' | 'agenda' | 'schedule' | 'admin'
+type NavKey = 'home' | 'appointments' | 'wallet' | 'agenda' | 'schedule' | 'admin' | 'settings'
 
 type NavItem = { key: NavKey; label: string; icon: string }
 
@@ -522,6 +524,15 @@ function App() {
     setSelectedServices([])
   }
 
+  const updateSessionUser = (patch: Partial<User>) => {
+    setSession((prev) => {
+      if (!prev) return prev
+      const next = { ...prev, user: { ...prev.user, ...patch } }
+      localStorage.setItem('razorfy.session', JSON.stringify(next))
+      return next
+    })
+  }
+
   // Sessão expirada (401 em chamada autenticada): volta ao login automaticamente.
   useEffect(() => {
     const onUnauthorized = () => signOut()
@@ -609,6 +620,8 @@ function App() {
       <BarberAgendaPage session={session} />
     ) : nav === 'schedule' ? (
       <BarberSchedulePage session={session} />
+    ) : nav === 'settings' ? (
+      <SettingsPage session={session} onSignOut={signOut} onProfileChange={(u) => updateSessionUser(u)} />
     ) : null
 
   return (
@@ -2039,7 +2052,178 @@ function ClientNotesModal({
 
 // ---------- Centro de Comando (ADMIN) ----------
 
-type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations'
+type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules'
+type GlobalSettingsData = { noShowToleranceMinutes: number; defaultCashbackPct: number }
+
+type AdminBarberRow = {
+  barberId: string
+  name: string
+  email: string
+  phone: string | null
+  isActive: boolean
+  totalAppointmentsConcluded: number
+}
+type AdminServiceRow = {
+  serviceId: string
+  name: string
+  price: number
+  durationMinutes: number
+  isActive: boolean
+  totalAppointments: number
+}
+
+type MeResponse = {
+  userId: string
+  name: string
+  email: string
+  phone: string | null
+  notificationPushEnabled: boolean
+  notificationWhatsappEnabled: boolean
+  role: string
+  hasPassword: boolean
+}
+
+function SettingsPage({ session, onSignOut, onProfileChange }: {
+  session: Session
+  onSignOut: () => void
+  onProfileChange: (patch: Partial<User>) => void
+}) {
+  const token = session.accessToken
+  const [me, setMe] = useState<MeResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [profile, setProfile] = useState({ name: '', phone: '', push: true, whatsapp: true })
+  const [pwd, setPwd] = useState({ current: '', next: '' })
+  const [delPwd, setDelPwd] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    request<MeResponse>('/users/me', {}, token)
+      .then((data) => {
+        setMe(data)
+        setProfile({ name: data.name, phone: data.phone ?? '', push: data.notificationPushEnabled, whatsapp: data.notificationWhatsappEnabled })
+      })
+      .catch((c) => setError(c.message))
+      .finally(() => setLoading(false))
+  }, [token])
+
+  async function saveProfile(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError(''); setSuccess('')
+    try {
+      const r = await request<MeResponse>('/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: profile.name,
+          phone: profile.phone || undefined,
+          notificationPushEnabled: profile.push,
+          notificationWhatsappEnabled: profile.whatsapp,
+        }),
+      }, token)
+      setMe(r)
+      onProfileChange({ name: r.name, phone: r.phone })
+      setSuccess('Perfil atualizado.')
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Não foi possível salvar.')
+    } finally { setBusy(false) }
+  }
+
+  async function savePassword(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError(''); setSuccess('')
+    try {
+      await request('/users/me/password', { method: 'PUT', body: JSON.stringify({ currentPassword: pwd.current, newPassword: pwd.next }) }, token)
+      setPwd({ current: '', next: '' })
+      setSuccess('Senha alterada.')
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Não foi possível trocar a senha.')
+    } finally { setBusy(false) }
+  }
+
+  async function deleteAccount() {
+    setBusy(true); setError('')
+    try {
+      await request('/users/me', { method: 'DELETE', body: JSON.stringify({ currentPassword: delPwd }) }, token)
+      onSignOut()
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Não foi possível excluir a conta.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col min-h-screen pb-20 lg:pb-4">
+      <div className="lg:hidden"><TopBar title="Conta" /></div>
+      <main className="flex-grow w-full max-w-[640px] mx-auto px-4 md:px-8 py-4 lg:py-8 flex flex-col gap-5">
+        <div className="hidden lg:block">
+          <h1 className="text-[28px] font-bold text-on-surface tracking-tight">Configurações</h1>
+        </div>
+        {error && <ErrorBanner message={error} />}
+        {success && <SuccessBanner message={success} />}
+
+        {loading || !me ? (
+          <div className="h-40 bg-surface-container-lowest rounded-xl animate-pulse" />
+        ) : (
+          <>
+            {/* Perfil + notificações */}
+            <form onSubmit={saveProfile} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+              <h2 className="text-[15px] font-bold text-on-surface">Perfil</h2>
+              <label className="text-[12px] text-on-surface-variant">Nome
+                <input value={profile.name} onChange={(e) => setProfile((p) => ({ ...p, name: e.target.value }))} minLength={3} required className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+              </label>
+              <label className="text-[12px] text-on-surface-variant">E-mail (não editável)
+                <input value={me.email} disabled className="h-11 px-3 mt-1 w-full bg-surface-container-high border border-on-surface/10 rounded-lg text-[13px] text-on-surface-variant" />
+              </label>
+              <label className="text-[12px] text-on-surface-variant">Telefone
+                <input value={profile.phone} onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value }))} placeholder="+55..." className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+              </label>
+              <label className="flex items-center justify-between gap-3 py-1">
+                <span className="text-[13px] text-on-surface">Notificações Push</span>
+                <input type="checkbox" checked={profile.push} onChange={(e) => setProfile((p) => ({ ...p, push: e.target.checked }))} className="w-4 h-4 accent-primary" />
+              </label>
+              <label className="flex items-center justify-between gap-3 py-1">
+                <span className="text-[13px] text-on-surface">Notificações WhatsApp</span>
+                <input type="checkbox" checked={profile.whatsapp} onChange={(e) => setProfile((p) => ({ ...p, whatsapp: e.target.checked }))} className="w-4 h-4 accent-primary" />
+              </label>
+              <button disabled={busy} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Salvar perfil</button>
+            </form>
+
+            {/* Senha */}
+            {me.hasPassword && (
+              <form onSubmit={savePassword} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+                <h2 className="text-[15px] font-bold text-on-surface">Trocar senha</h2>
+                <input type="password" value={pwd.current} onChange={(e) => setPwd((p) => ({ ...p, current: e.target.value }))} placeholder="Senha atual" required className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                <input type="password" value={pwd.next} onChange={(e) => setPwd((p) => ({ ...p, next: e.target.value }))} placeholder="Nova senha (mín. 6)" minLength={6} required className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                <button disabled={busy} className="h-11 rounded-lg bg-secondary text-on-secondary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Alterar senha</button>
+              </form>
+            )}
+
+            {/* Excluir conta (apenas cliente) */}
+            {me.role === 'CLIENT' && (
+              <div className="bg-surface-container-lowest border border-error/30 rounded-xl p-4 flex flex-col gap-3">
+                <h2 className="text-[15px] font-bold text-error">Excluir minha conta</h2>
+                <p className="text-[12px] text-on-surface-variant">Sua conta será anonimizada (LGPD) e o saldo de cashback será perdido permanentemente. Cancele agendamentos futuros antes.</p>
+                {!confirmDelete ? (
+                  <button onClick={() => setConfirmDelete(true)} className="h-11 rounded-lg border border-error text-error text-[12px] font-semibold uppercase tracking-wider hover:bg-error-container">Excluir conta</button>
+                ) : (
+                  <>
+                    <input type="password" value={delPwd} onChange={(e) => setDelPwd(e.target.value)} placeholder="Confirme com sua senha" className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                    <div className="flex gap-2">
+                      <button onClick={() => { setConfirmDelete(false); setDelPwd('') }} className="flex-1 h-11 rounded-lg border border-on-surface/20 text-[12px] font-semibold text-on-surface-variant">Cancelar</button>
+                      <button onClick={deleteAccount} disabled={busy || !delPwd} className="flex-1 h-11 rounded-lg bg-error text-on-error text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Confirmar exclusão</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
 
 function AdminCommandCenter({ session }: { session: Session }) {
   const token = session.accessToken
@@ -2051,6 +2235,9 @@ function AdminCommandCenter({ session }: { session: Session }) {
   const [coupons, setCoupons] = useState<CouponItem[]>([])
   const [commissions, setCommissions] = useState<CommissionRule[]>([])
   const [vacations, setVacations] = useState<VacationBlock[]>([])
+  const [adminBarbers, setAdminBarbers] = useState<AdminBarberRow[]>([])
+  const [adminServices, setAdminServices] = useState<AdminServiceRow[]>([])
+  const [rulesForm, setRulesForm] = useState<GlobalSettingsData>({ noShowToleranceMinutes: 15, defaultCashbackPct: 10 })
   const [settlement, setSettlement] = useState<CommissionSettlement | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -2065,12 +2252,14 @@ function AdminCommandCenter({ session }: { session: Session }) {
   })
   const [commissionForm, setCommissionForm] = useState({ barberId: '', serviceId: '', commissionPct: '50' })
   const [vacationForm, setVacationForm] = useState({ barberId: '', startDate: tomorrow(), endDate: tomorrow() })
+  const [barberForm, setBarberForm] = useState({ name: '', email: '', phone: '', initialPassword: '' })
+  const [serviceForm, setServiceForm] = useState({ name: '', durationMinutes: '30', price: '35' })
 
   async function loadAll(nextDate = date) {
     setLoading(true)
     setError('')
     try {
-      const [dash, barberList, serviceList, couponList, commissionList, vacationList, settlementData] = await Promise.all([
+      const [dash, barberList, serviceList, couponList, commissionList, vacationList, settlementData, adminBarberList, adminServiceList, settingsData] = await Promise.all([
         request<AdminDashboard>(`/admin/dashboard?date=${nextDate}`, {}, token),
         request<Barber[]>('/barbers'),
         request<ServiceItem[]>('/services'),
@@ -2078,6 +2267,9 @@ function AdminCommandCenter({ session }: { session: Session }) {
         request<CommissionRule[]>('/admin/commissions', {}, token),
         request<VacationBlock[]>('/admin/vacation-blocks', {}, token),
         request<CommissionSettlement>(`/admin/commissions/settlement?from=${nextDate}&to=${nextDate}`, {}, token),
+        request<AdminBarberRow[]>('/admin/barbers', {}, token),
+        request<AdminServiceRow[]>('/admin/services', {}, token),
+        request<GlobalSettingsData>('/admin/global-settings', {}, token),
       ])
       setDashboard(dash)
       setBarbers(barberList)
@@ -2086,6 +2278,9 @@ function AdminCommandCenter({ session }: { session: Session }) {
       setCommissions(commissionList)
       setVacations(vacationList)
       setSettlement(settlementData)
+      setAdminBarbers(adminBarberList)
+      setAdminServices(adminServiceList)
+      setRulesForm({ noShowToleranceMinutes: settingsData.noShowToleranceMinutes, defaultCashbackPct: Number(settingsData.defaultCashbackPct) })
       setCommissionForm((prev) => ({
         ...prev,
         barberId: prev.barberId || barberList[0]?.id || '',
@@ -2143,6 +2338,131 @@ function AdminCommandCenter({ session }: { session: Session }) {
       await loadAll()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível remover o cupom.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggleBarberStatus(barberId: string, isActive: boolean) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const r = await request<{ name: string; newStatus: boolean; orphanedAppointments: { appointmentId: string }[] }>(
+        `/admin/barbers/${barberId}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }, token,
+      )
+      const orphans = r.orphanedAppointments?.length ?? 0
+      setSuccess(
+        `${r.name} ${r.newStatus ? 'ativado' : 'inativado'}.` +
+        (orphans > 0 ? ` Atenção: ${orphans} agendamento(s) futuro(s) confirmado(s) a realocar.` : ''),
+      )
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível alterar o barbeiro.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function toggleServiceStatus(serviceId: string, isActive: boolean) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const r = await request<{ message: string }>(
+        `/admin/services/${serviceId}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }, token,
+      )
+      setSuccess(r.message)
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível alterar o serviço.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveRules(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const r = await request<GlobalSettingsData>('/admin/global-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          noShowToleranceMinutes: Number(rulesForm.noShowToleranceMinutes),
+          defaultCashbackPct: Number(rulesForm.defaultCashbackPct),
+        }),
+      }, token)
+      setRulesForm({ noShowToleranceMinutes: r.noShowToleranceMinutes, defaultCashbackPct: Number(r.defaultCashbackPct) })
+      setSuccess('Regras da barbearia atualizadas.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível salvar as regras.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function createBarberSubmit(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const r = await request<{ name: string }>('/admin/barbers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: barberForm.name.trim(),
+          email: barberForm.email.trim(),
+          phone: barberForm.phone.trim(),
+          initialPassword: barberForm.initialPassword,
+        }),
+      }, token)
+      setSuccess(`Barbeiro ${r.name} criado.`)
+      setBarberForm({ name: '', email: '', phone: '', initialPassword: '' })
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível criar o barbeiro.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function createServiceSubmit(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const r = await request<{ name: string }>('/admin/services', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: serviceForm.name.trim(),
+          durationMinutes: Number(serviceForm.durationMinutes),
+          price: Number(serviceForm.price),
+        }),
+      }, token)
+      setSuccess(`Serviço ${r.name} criado.`)
+      setServiceForm({ name: '', durationMinutes: '30', price: '35' })
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível criar o serviço.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteBarberRow(barberId: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/barbers/${barberId}`, { method: 'DELETE' }, token)
+      setSuccess('Barbeiro excluído.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível excluir o barbeiro.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteServiceRow(serviceId: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/admin/services/${serviceId}`, { method: 'DELETE' }, token)
+      setSuccess('Serviço excluído.')
+      await loadAll()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível excluir o serviço.')
     } finally {
       setSaving(false)
     }
@@ -2321,6 +2641,9 @@ function AdminCommandCenter({ session }: { session: Session }) {
                 { key: 'coupons' as const, label: 'Cupons', icon: 'sell' },
                 { key: 'commissions' as const, label: 'Repasses', icon: 'percent' },
                 { key: 'vacations' as const, label: 'Férias', icon: 'beach_access' },
+                { key: 'barbers' as const, label: 'Barbeiros', icon: 'group' },
+                { key: 'services' as const, label: 'Serviços', icon: 'content_cut' },
+                { key: 'rules' as const, label: 'Regras', icon: 'tune' },
               ].map((item) => (
                 <button key={item.key} onClick={() => setTab(item.key)} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap border transition-colors ${tab === item.key ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-lowest text-on-surface-variant border-on-surface/10 hover:text-on-surface'}`}>
                   <Icon name={item.icon} className="text-[16px]" />
@@ -2489,6 +2812,107 @@ function AdminCommandCenter({ session }: { session: Session }) {
                   ))}
                 </div>
               </div>
+            )}
+
+            {tab === 'barbers' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                <form onSubmit={createBarberSubmit} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3 h-fit">
+                  <h2 className="text-[15px] font-bold text-on-surface">Novo barbeiro</h2>
+                  <input required placeholder="Nome" value={barberForm.name} onChange={(e) => setBarberForm((p) => ({ ...p, name: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input required type="email" placeholder="E-mail" value={barberForm.email} onChange={(e) => setBarberForm((p) => ({ ...p, email: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input required placeholder="Telefone (+55...)" value={barberForm.phone} onChange={(e) => setBarberForm((p) => ({ ...p, phone: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <input required type="password" placeholder="Senha inicial" value={barberForm.initialPassword} onChange={(e) => setBarberForm((p) => ({ ...p, initialPassword: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <button disabled={saving} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Cadastrar</button>
+                </form>
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  {adminBarbers.length === 0 ? (
+                    <p className="p-4 text-[13px] text-on-surface-variant">Nenhum barbeiro cadastrado.</p>
+                  ) : adminBarbers.map((b) => (
+                    <div key={b.barberId} className="p-4 border-b last:border-b-0 border-on-surface/10 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[14px] font-bold text-on-surface flex items-center gap-2">
+                          {b.name}
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${b.isActive ? 'bg-green-100 text-green-800' : 'bg-surface-container-high text-on-surface-variant'}`}>
+                            {b.isActive ? 'Ativo' : 'Inativo'}
+                          </span>
+                        </p>
+                        <p className="text-[12px] text-on-surface-variant truncate">{b.email} · {b.totalAppointmentsConcluded} concluídos</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => toggleBarberStatus(b.barberId, !b.isActive)}
+                          disabled={saving}
+                          className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-colors disabled:opacity-40 ${b.isActive ? 'text-error border-error/40 hover:bg-error-container' : 'text-green-700 border-green-300 hover:bg-green-50'}`}
+                        >
+                          {b.isActive ? 'Inativar' : 'Ativar'}
+                        </button>
+                        {b.totalAppointmentsConcluded === 0 && (
+                          <button onClick={() => deleteBarberRow(b.barberId)} disabled={saving} className="p-2 text-on-surface-variant hover:text-error" aria-label="Excluir barbeiro" title="Excluir (sem histórico)"><Icon name="delete" /></button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'services' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                <form onSubmit={createServiceSubmit} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3 h-fit">
+                  <h2 className="text-[15px] font-bold text-on-surface">Novo serviço</h2>
+                  <input required placeholder="Nome" value={serviceForm.name} onChange={(e) => setServiceForm((p) => ({ ...p, name: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <label className="text-[12px] text-on-surface-variant">Duração (min)
+                    <input required type="number" min="1" value={serviceForm.durationMinutes} onChange={(e) => setServiceForm((p) => ({ ...p, durationMinutes: e.target.value }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                  </label>
+                  <label className="text-[12px] text-on-surface-variant">Preço (R$)
+                    <input required type="number" min="0" step="0.01" value={serviceForm.price} onChange={(e) => setServiceForm((p) => ({ ...p, price: e.target.value }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                  </label>
+                  <button disabled={saving} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Cadastrar</button>
+                </form>
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  {adminServices.length === 0 ? (
+                    <p className="p-4 text-[13px] text-on-surface-variant">Nenhum serviço cadastrado.</p>
+                  ) : adminServices.map((s) => (
+                    <div key={s.serviceId} className="p-4 border-b last:border-b-0 border-on-surface/10 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[14px] font-bold text-on-surface flex items-center gap-2">
+                          {s.name}
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${s.isActive ? 'bg-green-100 text-green-800' : 'bg-surface-container-high text-on-surface-variant'}`}>
+                            {s.isActive ? 'Ativo' : 'Inativo'}
+                          </span>
+                        </p>
+                        <p className="text-[12px] text-on-surface-variant truncate">{money.format(s.price)} · {s.durationMinutes} min · {s.totalAppointments} agendamentos</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => toggleServiceStatus(s.serviceId, !s.isActive)}
+                          disabled={saving}
+                          className={`px-3 py-1.5 rounded-lg text-[12px] font-semibold border transition-colors disabled:opacity-40 ${s.isActive ? 'text-error border-error/40 hover:bg-error-container' : 'text-green-700 border-green-300 hover:bg-green-50'}`}
+                        >
+                          {s.isActive ? 'Inativar' : 'Ativar'}
+                        </button>
+                        {s.totalAppointments === 0 && (
+                          <button onClick={() => deleteServiceRow(s.serviceId)} disabled={saving} className="p-2 text-on-surface-variant hover:text-error" aria-label="Excluir serviço" title="Excluir (sem histórico)"><Icon name="delete" /></button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'rules' && (
+              <form onSubmit={saveRules} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-4 max-w-md">
+                <h2 className="text-[15px] font-bold text-on-surface">Regras da barbearia</h2>
+                <p className="text-[12px] text-on-surface-variant">Parâmetros globais do sistema. Alterações têm efeito imediato (cache invalidado).</p>
+                <label className="text-[12px] text-on-surface-variant">Tolerância de No-Show (minutos, 5–60)
+                  <input type="number" min={5} max={60} required value={rulesForm.noShowToleranceMinutes} onChange={(e) => setRulesForm((p) => ({ ...p, noShowToleranceMinutes: Number(e.target.value) }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                </label>
+                <label className="text-[12px] text-on-surface-variant">Taxa padrão de cashback (%, 0–100)
+                  <input type="number" min={0} max={100} step="0.01" required value={rulesForm.defaultCashbackPct} onChange={(e) => setRulesForm((p) => ({ ...p, defaultCashbackPct: Number(e.target.value) }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                </label>
+                <button disabled={saving} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Salvar regras</button>
+              </form>
             )}
           </>
         )}

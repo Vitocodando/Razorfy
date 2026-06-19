@@ -15,6 +15,10 @@ model User {
   password  String?  @db.VarChar(255)
   googleId  String?  @unique @map("google_id") @db.VarChar(255)
   role      String   @db.VarChar(20)
+  isActive  Boolean  @default(true) @map("is_active")
+  notificationPushEnabled     Boolean @default(true) @map("notification_push_enabled")
+  notificationWhatsappEnabled Boolean @default(true) @map("notification_whatsapp_enabled")
+  isAnonymized                Boolean @default(false) @map("is_anonymized")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   barberSlots                  BarberSlot[]
@@ -32,6 +36,15 @@ model User {
   authoredNotes                ClientNote[]               @relation("AuthoredNotes")
 
   @@map("users")
+}
+
+model GlobalSettings {
+  id                     Int      @id @default(1)
+  noShowToleranceMinutes Int      @default(15) @map("no_show_tolerance_minutes")
+  defaultCashbackPct     Decimal  @default(10) @map("default_cashback_pct") @db.Decimal(5, 2)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("global_settings")
 }
 
 model BarberSlot {

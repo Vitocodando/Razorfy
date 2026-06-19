@@ -31,6 +31,7 @@ const review_router_1 = require("./review/review.router");
 const goal_router_1 = require("./goal/goal.router");
 const crm_router_1 = require("./crm/crm.router");
 const admin_router_1 = require("./admin/admin.router");
+const user_router_1 = require("./user/user.router");
 function createApp() {
     const app = (0, express_1.default)();
     app.use((0, cors_1.default)({ origin: config_1.config.CORS_ALLOWED_ORIGIN, credentials: true }));
@@ -48,6 +49,7 @@ function createApp() {
     app.use('/api/v1', goal_router_1.goalRouter);
     app.use('/api/v1', crm_router_1.crmRouter);
     app.use('/api/v1/admin', admin_router_1.adminRouter);
+    app.use('/api/v1/users', user_router_1.userRouter);
     app.use('/api/internal/jobs', jobs_router_1.jobsRouter);
     app.use(errorHandler_1.errorHandler);
     return app;

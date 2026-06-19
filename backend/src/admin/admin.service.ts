@@ -1,10 +1,12 @@
 import { Prisma } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import { prisma } from '../prisma';
 import { BusinessError } from '../common/BusinessError';
 import { dateOnlyUtc, localDateString, localDayRangeUtc } from '../schedule/availability.service';
 import * as cashbackSvc from '../cashback/cashback.service';
 import * as auditSvc from '../audit/audit.service';
 import * as notifSvc from '../notification/notification.service';
+import * as settingsSvc from '../settings/settings.service';
 import { config } from '../config';
 
 type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -30,7 +32,16 @@ type VacationInput = {
   reason?: string;
 };
 
-const NO_SHOW_TOLERANCE_MINUTES = 15;
+export async function getGlobalSettings() {
+  return settingsSvc.publicSettings(await settingsSvc.getSettings());
+}
+
+export async function updateGlobalSettings(adminId: string, data: { noShowToleranceMinutes: number; defaultCashbackPct: number }) {
+  const previous = await settingsSvc.getSettings();
+  const updated = await settingsSvc.updateSettings(data);
+  adminAuditLog(adminId, 'UPDATE_GLOBAL_SETTINGS', settingsSvc.publicSettings(previous), settingsSvc.publicSettings(updated));
+  return settingsSvc.publicSettings(updated);
+}
 
 export async function listCoupons() {
   return prisma.coupon.findMany({ orderBy: { createdAt: 'desc' } });
@@ -205,11 +216,12 @@ export async function applyNoShow(adminId: string, appointmentId: string, reason
       throw new BusinessError('INVALID_APPOINTMENT_STATE', 'Apenas agendamentos confirmados podem receber No-Show.', 422);
     }
 
-    const dueAt = new Date(appt.startTimestamp.getTime() + NO_SHOW_TOLERANCE_MINUTES * 60 * 1000);
+    const tolerance = await settingsSvc.getNoShowToleranceMinutes();
+    const dueAt = new Date(appt.startTimestamp.getTime() + tolerance * 60 * 1000);
     if (new Date() <= dueAt) {
       throw new BusinessError(
         'APPOINTMENT_NOT_YET_DUE',
-        'O agendamento ainda não ultrapassou o período de tolerância de 15 minutos para ser classificado como No-Show.',
+        `O agendamento ainda não ultrapassou o período de tolerância de ${tolerance} minutos para ser classificado como No-Show.`,
         422,
       );
     }
@@ -493,6 +505,9 @@ export async function runWinBackCampaign(referenceDate = localDateString()) {
     JOIN appointments a ON a.client_id = u.id
     WHERE u.role = 'CLIENT'
       AND u.phone IS NOT NULL
+      AND u.is_active = true
+      AND u.is_anonymized = false
+      AND u.notification_whatsapp_enabled = true
       AND a.status = 'CONCLUDED'
     GROUP BY u.id, u.name, u.phone
     HAVING MAX((a.start_timestamp AT TIME ZONE ${config.BUSINESS_TIMEZONE})::date) = ${targetDate}::date
@@ -664,4 +679,192 @@ function addDays(dateStr: string, days: number): string {
   const date = new Date(dateStr + 'T12:00:00Z');
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+// ----- Gestão de Barbeiros e Serviços (RF06/RF07/RF08, RN06/RN07/RN08, V05/V06) -----
+
+// RF06 / RN07: lista TODOS os barbeiros (ativos e inativos) com total de concluídos.
+export async function listBarbersAdmin() {
+  const [barbers, counts] = await Promise.all([
+    prisma.user.findMany({
+      where: { role: 'BARBER' },
+      select: { id: true, name: true, email: true, phone: true, isActive: true },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.appointment.groupBy({ by: ['barberId'], where: { status: 'CONCLUDED' }, _count: true }),
+  ]);
+  const countMap = new Map(counts.map(c => [c.barberId, c._count]));
+  return barbers.map(b => ({
+    barberId: b.id,
+    name: b.name,
+    email: b.email,
+    phone: b.phone,
+    isActive: b.isActive,
+    totalAppointmentsConcluded: countMap.get(b.id) ?? 0,
+  }));
+}
+
+// RF07 / RN07: lista TODO o catálogo (ativos e inativos) com nº de agendamentos atrelados.
+export async function listServicesAdmin() {
+  const [services, counts] = await Promise.all([
+    prisma.service.findMany({ orderBy: { name: 'asc' } }),
+    prisma.appointmentService.groupBy({ by: ['serviceId'], _count: true }),
+  ]);
+  const countMap = new Map(counts.map(c => [c.serviceId, c._count]));
+  return services.map(s => ({
+    serviceId: s.id,
+    name: s.name,
+    price: s.price,
+    durationMinutes: s.durationMinutes,
+    isActive: s.active,
+    totalAppointments: countMap.get(s.id) ?? 0,
+  }));
+}
+
+// RF08 / V06 / RN08: ativa/inativa barbeiro (soft-delete). Não permite alterar ADMIN.
+export async function setBarberStatus(adminId: string, barberId: string, isActive: boolean) {
+  const barber = await prisma.user.findUnique({
+    where: { id: barberId },
+    select: { id: true, name: true, role: true, isActive: true },
+  });
+  if (!barber || barber.role !== 'BARBER') {
+    // V06: bloqueia alterar ADMIN (inclui o próprio) ou inexistente via rota de barbeiros.
+    if (barber && barber.role === 'ADMIN') {
+      throw new BusinessError('CANNOT_MODIFY_ADMIN', 'Não é permitido alterar o status de um administrador.', 403);
+    }
+    throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+  }
+
+  const updated = await prisma.user.update({ where: { id: barberId }, data: { isActive } });
+  adminAuditLog(adminId, 'BARBER_STATUS_CHANGE', { barberId, isActive: barber.isActive }, { barberId, isActive });
+
+  // RN08: ao inativar, alerta sobre agendamentos futuros CONFIRMED a realocar.
+  let orphanedAppointments: Array<{ appointmentId: string; clientName: string; startTimestamp: Date }> = [];
+  if (!isActive) {
+    const future = await prisma.appointment.findMany({
+      where: { barberId, status: 'CONFIRMED', startTimestamp: { gt: new Date() } },
+      include: { client: { select: { name: true } } },
+      orderBy: { startTimestamp: 'asc' },
+    });
+    orphanedAppointments = future.map(a => ({
+      appointmentId: a.id,
+      clientName: a.client.name,
+      startTimestamp: a.startTimestamp,
+    }));
+  }
+
+  return {
+    barberId,
+    name: updated.name,
+    previousStatus: barber.isActive,
+    newStatus: updated.isActive,
+    orphanedAppointments,
+  };
+}
+
+// RF08 / V05: ativa/inativa serviço (usa services.active). Impede 2 ativos com mesmo nome.
+export async function setServiceStatus(adminId: string, serviceId: string, isActive: boolean) {
+  const service = await prisma.service.findUnique({ where: { id: serviceId } });
+  if (!service) throw new BusinessError('SERVICE_NOT_FOUND', 'Serviço não encontrado.', 404);
+
+  if (isActive) {
+    const duplicate = await prisma.service.findFirst({
+      where: { name: service.name, active: true, id: { not: serviceId } },
+    });
+    if (duplicate) {
+      throw new BusinessError('DUPLICATE_ACTIVE_SERVICE', 'Já existe um serviço ativo com este nome.', 422);
+    }
+  }
+
+  const updated = await prisma.service.update({ where: { id: serviceId }, data: { active: isActive } });
+  adminAuditLog(adminId, 'SERVICE_STATUS_CHANGE', { serviceId, isActive: service.active }, { serviceId, isActive });
+
+  return {
+    serviceId,
+    name: updated.name,
+    previousStatus: service.active,
+    newStatus: updated.active,
+    message: isActive ? 'Serviço ativado com sucesso.' : 'Serviço desativado com sucesso. Histórico preservado.',
+  };
+}
+
+// ----- Criação e deleção física de barbeiros e serviços (RN01/RN02/RN03, V01/V02) -----
+
+// RF01 / V01 / RN02 / RN03: cria barbeiro (role forçada BARBER, senha BCrypt, email/phone únicos).
+export async function createBarber(adminId: string, data: { name: string; email: string; phone: string; initialPassword: string }) {
+  const byEmail = await prisma.user.findFirst({ where: { email: { equals: data.email, mode: 'insensitive' } } });
+  if (byEmail) throw new BusinessError('DUPLICATE_EMAIL', 'Já existe um usuário com este e-mail.', 422);
+  const byPhone = await prisma.user.findFirst({ where: { phone: data.phone } });
+  if (byPhone) throw new BusinessError('DUPLICATE_PHONE', 'Já existe um usuário com este telefone.', 422);
+
+  const hash = await bcrypt.hash(data.initialPassword, 12);
+  const user = await prisma.user.create({
+    data: { name: data.name, email: data.email, phone: data.phone, password: hash, role: 'BARBER', isActive: true },
+  });
+  adminAuditLog(adminId, 'BARBER_CREATE', null, { barberId: user.id, email: user.email });
+  return { barberId: user.id, name: user.name, email: user.email, isActive: user.isActive, role: user.role };
+}
+
+// RF02 / RN03: cria serviço (nome único case-insensitive).
+export async function createService(adminId: string, data: { name: string; durationMinutes: number; price: number }) {
+  const dup = await prisma.service.findFirst({ where: { name: { equals: data.name, mode: 'insensitive' } } });
+  if (dup) throw new BusinessError('DUPLICATE_SERVICE_NAME', 'Já existe um serviço com este nome.', 422);
+
+  const service = await prisma.service.create({
+    data: { name: data.name, durationMinutes: data.durationMinutes, price: new Prisma.Decimal(data.price).toDecimalPlaces(2), active: true },
+  });
+  adminAuditLog(adminId, 'SERVICE_CREATE', null, { serviceId: service.id, name: service.name });
+  return { serviceId: service.id, name: service.name, price: service.price, durationMinutes: service.durationMinutes, isActive: service.active };
+}
+
+// RF03 / V02 / RN01: hard-delete de barbeiro só sem agendamentos; limpa config própria na transação.
+export async function deleteBarber(adminId: string, barberId: string) {
+  const barber = await prisma.user.findUnique({ where: { id: barberId }, select: { id: true, role: true } });
+  if (!barber || barber.role !== 'BARBER') {
+    if (barber && barber.role === 'ADMIN') {
+      throw new BusinessError('CANNOT_MODIFY_ADMIN', 'Não é permitido excluir um administrador.', 403);
+    }
+    throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+  }
+  const count = await prisma.appointment.count({ where: { barberId } });
+  if (count > 0) {
+    throw new BusinessError(
+      'ENTITY_IN_USE',
+      `Este barbeiro possui ${count} agendamento(s) atrelado(s) e não pode ser apagado. Utilize a função de inativação.`,
+      409,
+      { suggestion: `PATCH /api/v1/admin/barbers/${barberId}/status` },
+    );
+  }
+  await prisma.$transaction([
+    prisma.barberSlot.deleteMany({ where: { barberId } }),
+    prisma.scheduleBlock.deleteMany({ where: { barberId } }),
+    prisma.vacationBlock.deleteMany({ where: { barberId } }),
+    prisma.barberGoal.deleteMany({ where: { barberId } }),
+    prisma.barberCommission.deleteMany({ where: { barberId } }),
+    prisma.review.deleteMany({ where: { barberId } }),
+    prisma.clientNote.deleteMany({ where: { authorId: barberId } }),
+    prisma.user.delete({ where: { id: barberId } }),
+  ]);
+  adminAuditLog(adminId, 'BARBER_HARD_DELETE', { barberId }, null);
+}
+
+// RF03 / V02 / RN01: hard-delete de serviço só sem agendamentos; limpa associações.
+export async function deleteService(adminId: string, serviceId: string) {
+  const service = await prisma.service.findUnique({ where: { id: serviceId } });
+  if (!service) throw new BusinessError('SERVICE_NOT_FOUND', 'Serviço não encontrado.', 404);
+
+  const count = await prisma.appointmentService.count({ where: { serviceId } });
+  if (count > 0) {
+    throw new BusinessError(
+      'ENTITY_IN_USE',
+      `Este serviço não pode ser excluído pois possui ${count} agendamento(s) atrelado(s). Inative-o para removê-lo do catálogo ativo.`,
+      409,
+      { suggestion: `PATCH /api/v1/admin/services/${serviceId}/status` },
+    );
+  }
+  await prisma.$transaction([
+    prisma.barberCommission.deleteMany({ where: { serviceId } }),
+    prisma.service.delete({ where: { id: serviceId } }),
+  ]);
+  adminAuditLog(adminId, 'SERVICE_HARD_DELETE', { serviceId }, null);
 }

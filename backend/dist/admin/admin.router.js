@@ -77,6 +77,50 @@ exports.adminRouter.delete('/vacation-blocks/:id', (0, asyncHandler_1.asyncHandl
     await (0, admin_service_1.deleteVacationBlock)(req.user.id, id);
     res.status(204).end();
 }));
+// Gestão de barbeiros (RF06/RF08 + criação/deleção)
+exports.adminRouter.get('/barbers', (0, asyncHandler_1.asyncHandler)(async (_req, res) => {
+    res.json(await (0, admin_service_1.listBarbersAdmin)());
+}));
+exports.adminRouter.post('/barbers', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const body = admin_schemas_1.CreateBarberSchema.parse(req.body);
+    res.status(201).json(await (0, admin_service_1.createBarber)(req.user.id, body));
+}));
+exports.adminRouter.patch('/barbers/:id/status', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const id = UuidParam.parse(req.params.id);
+    const { isActive } = admin_schemas_1.StatusSchema.parse(req.body);
+    res.json(await (0, admin_service_1.setBarberStatus)(req.user.id, id, isActive));
+}));
+exports.adminRouter.delete('/barbers/:id', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const id = UuidParam.parse(req.params.id);
+    await (0, admin_service_1.deleteBarber)(req.user.id, id);
+    res.status(204).end();
+}));
+// Gestão de catálogo (RF07/RF08 + criação/deleção)
+exports.adminRouter.get('/services', (0, asyncHandler_1.asyncHandler)(async (_req, res) => {
+    res.json(await (0, admin_service_1.listServicesAdmin)());
+}));
+exports.adminRouter.post('/services', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const body = admin_schemas_1.CreateServiceSchema.parse(req.body);
+    res.status(201).json(await (0, admin_service_1.createService)(req.user.id, body));
+}));
+exports.adminRouter.patch('/services/:id/status', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const id = UuidParam.parse(req.params.id);
+    const { isActive } = admin_schemas_1.StatusSchema.parse(req.body);
+    res.json(await (0, admin_service_1.setServiceStatus)(req.user.id, id, isActive));
+}));
+exports.adminRouter.delete('/services/:id', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const id = UuidParam.parse(req.params.id);
+    await (0, admin_service_1.deleteService)(req.user.id, id);
+    res.status(204).end();
+}));
+// Configurações globais (RF04) — cache invalidado no PUT
+exports.adminRouter.get('/global-settings', (0, asyncHandler_1.asyncHandler)(async (_req, res) => {
+    res.json(await (0, admin_service_1.getGlobalSettings)());
+}));
+exports.adminRouter.put('/global-settings', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const body = admin_schemas_1.GlobalSettingsSchema.parse(req.body);
+    res.json(await (0, admin_service_1.updateGlobalSettings)(req.user.id, body));
+}));
 exports.adminRouter.get('/alerts', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const status = zod_1.z.enum(['PENDING', 'RESOLVED']).optional().parse(req.query.status);
     res.json(await (0, admin_service_1.listAdminAlerts)(status));

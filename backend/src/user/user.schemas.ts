@@ -15,3 +15,13 @@ export const ChangePasswordSchema = z.object({
 export const DeleteAccountSchema = z.object({
   currentPassword: z.string().min(1),
 });
+
+// V01: código TOTP estritamente 6 dígitos numéricos.
+const TotpCode = z.string().regex(/^\d{6}$/, 'O código deve ter exatamente 6 dígitos.');
+
+export const Enable2faSchema = z.object({ code: TotpCode });
+
+export const Disable2faSchema = z.object({
+  currentPassword: z.string().min(1),
+  code: TotpCode,
+});

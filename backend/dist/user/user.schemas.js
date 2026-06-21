@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DeleteAccountSchema = exports.ChangePasswordSchema = exports.UpdateProfileSchema = void 0;
+exports.Disable2faSchema = exports.Enable2faSchema = exports.DeleteAccountSchema = exports.ChangePasswordSchema = exports.UpdateProfileSchema = void 0;
 const zod_1 = require("zod");
 exports.UpdateProfileSchema = zod_1.z.object({
     name: zod_1.z.string().trim().min(3).max(100).optional(),
@@ -14,4 +14,11 @@ exports.ChangePasswordSchema = zod_1.z.object({
 });
 exports.DeleteAccountSchema = zod_1.z.object({
     currentPassword: zod_1.z.string().min(1),
+});
+// V01: código TOTP estritamente 6 dígitos numéricos.
+const TotpCode = zod_1.z.string().regex(/^\d{6}$/, 'O código deve ter exatamente 6 dígitos.');
+exports.Enable2faSchema = zod_1.z.object({ code: TotpCode });
+exports.Disable2faSchema = zod_1.z.object({
+    currentPassword: zod_1.z.string().min(1),
+    code: TotpCode,
 });

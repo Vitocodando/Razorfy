@@ -28,3 +28,17 @@ exports.userRouter.delete('/me', (0, asyncHandler_1.asyncHandler)(async (req, re
     await (0, user_service_1.anonymizeAccount)(req.user.id, currentPassword);
     res.status(204).end();
 }));
+// FEAT-076: 2FA TOTP — setup / enable / disable da conta autenticada.
+exports.userRouter.post('/me/2fa/setup', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    res.json(await (0, user_service_1.setup2fa)(req.user.id));
+}));
+exports.userRouter.post('/me/2fa/enable', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { code } = user_schemas_1.Enable2faSchema.parse(req.body);
+    await (0, user_service_1.enable2fa)(req.user.id, code);
+    res.status(204).end();
+}));
+exports.userRouter.delete('/me/2fa', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { currentPassword, code } = user_schemas_1.Disable2faSchema.parse(req.body);
+    await (0, user_service_1.disable2fa)(req.user.id, currentPassword, code);
+    res.status(204).end();
+}));

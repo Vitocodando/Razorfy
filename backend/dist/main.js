@@ -18,16 +18,27 @@ async function main() {
         (0, outboxProcessor_1.startOutboxProcessor)(),
         (0, winBack_job_1.startWinBackJob)(),
     ];
-    async function shutdown() {
-        console.log('[razorfy] encerrando...');
+    let shuttingDown = false;
+    async function shutdown(signal) {
+        if (shuttingDown)
+            return; // idempotente: evita disconnect dobrado em SIGINT repetido
+        shuttingDown = true;
+        console.log(`[razorfy] encerrando (${signal})...`);
         jobs.forEach(j => clearInterval(j));
+        // Fallback: se server.close travar (keep-alive), força liberação do pool e saída.
+        const force = setTimeout(() => {
+            console.warn('[razorfy] shutdown forçado (timeout)');
+            void prisma_1.prisma.$disconnect().finally(() => process.exit(0));
+        }, 5000);
+        force.unref();
         server.close(async () => {
+            clearTimeout(force);
             await prisma_1.prisma.$disconnect();
             process.exit(0);
         });
     }
-    process.on('SIGTERM', shutdown);
-    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', () => void shutdown('SIGTERM'));
+    process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 main().catch(err => {
     console.error('[razorfy] falha na inicialização:', err);

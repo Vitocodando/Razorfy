@@ -55,7 +55,7 @@ export async function createGoal(data: { barberId: string; periodStart: string; 
     throw new BusinessError('INVALID_GOAL_TARGET', 'A meta de atendimentos deve ser maior que zero.', 422);
   }
   return prisma.barberGoal.create({
-    data: { barberId: data.barberId, periodStart, periodEnd, targetAppointments: data.targetAppointments },
+    data: { barberId: data.barberId, tenantId: barber.tenantId!, periodStart, periodEnd, targetAppointments: data.targetAppointments },
   });
 }
 

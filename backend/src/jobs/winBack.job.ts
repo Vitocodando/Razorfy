@@ -1,11 +1,18 @@
 import { config } from '../config';
+import { prisma } from '../prisma';
 import { localDateString } from '../schedule/availability.service';
 import { runWinBackCampaign } from '../admin/admin.service';
 
 let lastRunDate: string | null = null;
 
+// Roda a campanha para cada barbearia ativa (multi-tenant).
 export async function runWinBack(referenceDate = localDateString()) {
-  return runWinBackCampaign(referenceDate);
+  const tenants = await prisma.barbershop.findMany({ where: { isActive: true }, select: { id: true } });
+  const results = [];
+  for (const t of tenants) {
+    results.push(await runWinBackCampaign(t.id, referenceDate));
+  }
+  return { tenants: tenants.length, results };
 }
 
 export function startWinBackJob(): ReturnType<typeof setInterval> {

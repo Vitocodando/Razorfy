@@ -20,7 +20,7 @@ import { colors, fonts } from '../theme';
 type Mode = 'login' | 'register';
 
 export function AuthScreen() {
-  const { login, register } = useAuth();
+  const { login, verify2fa, register, tenant, clearTenant } = useAuth();
   const [mode, setMode] = useState<Mode>('login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -29,6 +29,8 @@ export function AuthScreen() {
   const [secure, setSecure] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [preAuth, setPreAuth] = useState<string | null>(null); // FA01: 2FA pendente
+  const [code, setCode] = useState('');
 
   async function submit() {
     setError('');
@@ -52,7 +54,8 @@ export function AuthScreen() {
     setLoading(true);
     try {
       if (mode === 'login') {
-        await login(email, password);
+        const r = await login(email, password);
+        if (r.require2fa && r.preAuthToken) { setPreAuth(r.preAuthToken); setCode(''); }
       } else {
         await register(name, email, phone, password);
       }
@@ -63,9 +66,55 @@ export function AuthScreen() {
     }
   }
 
+  async function submitCode() {
+    if (!preAuth || code.length !== 6) return;
+    setError(''); setLoading(true);
+    try {
+      await verify2fa(preAuth, code);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Código inválido.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function changeMode(nextMode: Mode) {
     setMode(nextMode);
     setError('');
+  }
+
+  // FA01: tela de verificação 2FA após credenciais válidas.
+  if (preAuth) {
+    return (
+      <LinearGradient colors={[colors.blueDark, colors.blue, '#3949ab']} style={styles.background}>
+        <SafeAreaView style={styles.safeArea}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+              <View style={styles.formCard}>
+                <Ionicons name="shield-checkmark-outline" size={40} color={colors.blue} style={{ alignSelf: 'center' }} />
+                <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Verificação em duas etapas</Text>
+                <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Digite o código de 6 dígitos do seu app autenticador.</Text>
+                <ErrorMessage message={error} />
+                <TextInput
+                  autoFocus
+                  keyboardType="number-pad"
+                  value={code}
+                  onChangeText={(t) => setCode(t.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
+                  placeholderTextColor={colors.muted}
+                  maxLength={6}
+                  style={styles.codeInput}
+                />
+                <PrimaryButton label={loading ? 'Verificando...' : 'Verificar'} onPress={submitCode} disabled={loading || code.length !== 6} />
+                <Pressable onPress={() => { setPreAuth(null); setCode(''); setError(''); }} style={{ marginTop: 12, alignSelf: 'center' }}>
+                  <Text style={styles.tenantChipChange}>Voltar ao login</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </LinearGradient>
+    );
   }
 
   return (
@@ -90,6 +139,13 @@ export function AuthScreen() {
               <Text style={styles.heroText}>
                 Serviços, horários e cashback na palma da sua mão.
               </Text>
+              {tenant ? (
+                <Pressable style={styles.tenantChip} onPress={() => void clearTenant()}>
+                  <Ionicons name="storefront-outline" size={15} color={colors.red} />
+                  <Text style={styles.tenantChipText}>{tenant.name}</Text>
+                  <Text style={styles.tenantChipChange}>· trocar</Text>
+                </Pressable>
+              ) : null}
             </View>
 
             <View style={styles.formCard}>
@@ -246,6 +302,18 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 28,
   },
+  tenantChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: colors.paper,
+  },
+  tenantChipText: { color: colors.ink, fontFamily: fonts.bold, fontSize: 12 },
+  tenantChipChange: { color: colors.muted, fontFamily: fonts.regular, fontSize: 11 },
   heroEyebrow: {
     color: '#d7daf5',
     fontFamily: fonts.bold,
@@ -276,6 +344,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 20,
     paddingBottom: 28,
+  },
+  codeInput: {
+    height: 58,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.paper,
+    color: colors.ink,
+    fontFamily: fonts.extraBold,
+    fontSize: 24,
+    letterSpacing: 8,
+    textAlign: 'center',
+    marginVertical: 12,
   },
   modeTabs: {
     flexDirection: 'row',

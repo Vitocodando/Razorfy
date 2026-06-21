@@ -5,6 +5,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.register = register;
 exports.login = login;
+exports.consumePreAuthToken = consumePreAuthToken;
+exports.verifyLogin2fa = verifyLogin2fa;
 exports.googleAuthUrl = googleAuthUrl;
 exports.loginWithGoogle = loginWithGoogle;
 const bcrypt_1 = __importDefault(require("bcrypt"));
@@ -13,7 +15,27 @@ const google_auth_library_1 = require("google-auth-library");
 const prisma_1 = require("../prisma");
 const config_1 = require("../config");
 const BusinessError_1 = require("../common/BusinessError");
+const crypto_1 = require("../common/crypto");
+const twofa_service_1 = require("./twofa.service");
 const STAFF_ROLES = ['BARBER', 'ADMIN', 'DEV'];
+const DEFAULT_TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
+const PRE_AUTH_TTL_SECONDS = 300; // 5 min (FEAT-076 RN: PRE_AUTH_EXPIRED)
+// Rate limiting do verify-2fa (NFR): 5 falhas → bloqueio de 15 min por usuário.
+const MAX_2FA_FAILS = 5;
+const LOCK_MS = 15 * 60 * 1000;
+const failTracker = new Map();
+// Resolve o tenant (por slug ou default) e garante que está ativo (RF03 / TENANT_SUSPENDED).
+async function resolveActiveTenant(slug) {
+    const shop = slug
+        ? await prisma_1.prisma.barbershop.findUnique({ where: { slug } })
+        : await prisma_1.prisma.barbershop.findUnique({ where: { id: DEFAULT_TENANT_ID } });
+    if (!shop)
+        throw new BusinessError_1.BusinessError('TENANT_NOT_FOUND', 'Barbearia não encontrada.', 404);
+    if (!shop.isActive) {
+        throw new BusinessError_1.BusinessError('TENANT_SUSPENDED', 'Esta barbearia encontra-se temporariamente indisponível na plataforma.', 403);
+    }
+    return shop.id;
+}
 let googleClient = null;
 function getGoogleClient() {
     if (!config_1.googleOAuthEnabled) {
@@ -29,8 +51,9 @@ function getGoogleClient() {
     return googleClient;
 }
 async function register(data) {
+    const tenantId = await resolveActiveTenant(data.tenantSlug);
     const existing = await prisma_1.prisma.user.findFirst({
-        where: { email: { equals: data.email, mode: 'insensitive' } },
+        where: { tenantId, email: { equals: data.email, mode: 'insensitive' } },
     });
     if (existing) {
         throw new BusinessError_1.BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409);
@@ -43,13 +66,42 @@ async function register(data) {
             phone: data.phone,
             password: hash,
             role: 'CLIENT',
+            tenantId,
         },
     });
     return sessionFor(user);
 }
-async function login(email, password) {
+// FA01: se 2FA ligado, não entrega o JWT — retorna token intermediário de pré-autenticação.
+function loginResult(user) {
+    if (user.is2faEnabled) {
+        return {
+            status: 'REQUIRE_2FA',
+            message: 'Credenciais válidas. Autenticação de dois fatores necessária.',
+            preAuthToken: preAuthTokenFor(user.id),
+        };
+    }
+    return sessionFor(user);
+}
+function preAuthTokenFor(userId) {
+    const now = Math.floor(Date.now() / 1000);
+    return jsonwebtoken_1.default.sign({ iss: 'razorfy', sub: userId, type: 'PRE_AUTH', iat: now, exp: now + PRE_AUTH_TTL_SECONDS }, config_1.config.JWT_SECRET, { algorithm: 'HS256', noTimestamp: true });
+}
+async function login(email, password, tenantSlug) {
+    // DEV (plataforma) é tenant-agnóstico: resolve antes do fluxo territorial.
+    const dev = await prisma_1.prisma.user.findFirst({
+        where: { role: 'DEV', email: { equals: email, mode: 'insensitive' } },
+    });
+    if (dev) {
+        if (!dev.password)
+            throw new BusinessError_1.BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
+        const ok = await bcrypt_1.default.compare(password, dev.password);
+        if (!ok)
+            throw new BusinessError_1.BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
+        return loginResult(dev);
+    }
+    const tenantId = await resolveActiveTenant(tenantSlug);
     const user = await prisma_1.prisma.user.findFirst({
-        where: { email: { equals: email, mode: 'insensitive' } },
+        where: { tenantId, email: { equals: email, mode: 'insensitive' } },
     });
     if (!user)
         throw new BusinessError_1.BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
@@ -60,6 +112,38 @@ async function login(email, password) {
     const valid = await bcrypt_1.default.compare(password, user.password);
     if (!valid)
         throw new BusinessError_1.BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
+    return loginResult(user);
+}
+// V02: valida o preAuthToken (claim type=PRE_AUTH) e retorna o userId; rejeita token comum/expirado.
+function consumePreAuthToken(token) {
+    let payload;
+    try {
+        payload = jsonwebtoken_1.default.verify(token, config_1.config.JWT_SECRET, { algorithms: ['HS256'] });
+    }
+    catch {
+        throw new BusinessError_1.BusinessError('PRE_AUTH_EXPIRED', 'Sessão de verificação expirada. Faça login novamente.', 401);
+    }
+    if (payload.type !== 'PRE_AUTH' || !payload.sub) {
+        throw new BusinessError_1.BusinessError('PRE_AUTH_INVALID', 'Token de verificação inválido.', 401);
+    }
+    return payload.sub;
+}
+// FA01 passo 7: valida o código TOTP e libera o JWT final. Rate-limited (NFR).
+async function verifyLogin2fa(userId, code) {
+    const tracker = failTracker.get(userId);
+    if (tracker && tracker.lockedUntil > Date.now()) {
+        throw new BusinessError_1.BusinessError('TOO_MANY_ATTEMPTS', 'Muitas tentativas incorretas. Tente novamente em alguns minutos.', 429);
+    }
+    const user = await prisma_1.prisma.user.findUnique({ where: { id: userId } });
+    if (!user || !user.is2faEnabled || !user.totpSecret) {
+        throw new BusinessError_1.BusinessError('PRE_AUTH_INVALID', 'Token de verificação inválido.', 401);
+    }
+    if (!(0, twofa_service_1.verifyCode)(code, (0, crypto_1.decryptSecret)(user.totpSecret))) {
+        const fails = (tracker?.fails ?? 0) + 1;
+        failTracker.set(userId, { fails, lockedUntil: fails >= MAX_2FA_FAILS ? Date.now() + LOCK_MS : 0 });
+        throw new BusinessError_1.BusinessError('INVALID_TOTP_CODE', 'Código inválido. Verifique o app autenticador.', 401);
+    }
+    failTracker.delete(userId);
     return sessionFor(user);
 }
 // Monta a URL de autorização do Google (Authorization Code). O state (CSRF) é gerado
@@ -99,19 +183,21 @@ async function loginWithGoogle(code) {
     const googleId = payload.sub;
     const email = payload.email.toLowerCase();
     const name = payload.name?.trim() || payload.email.split('@')[0];
+    // Fase 1: login social resolve para o tenant default.
+    const tenantId = await resolveActiveTenant();
     const user = await prisma_1.prisma.$transaction(async (tx) => {
-        const byGoogle = await tx.user.findUnique({ where: { googleId } });
+        const byGoogle = await tx.user.findFirst({ where: { tenantId, googleId } });
         if (byGoogle)
             return byGoogle;
         const byEmail = await tx.user.findFirst({
-            where: { email: { equals: email, mode: 'insensitive' } },
+            where: { tenantId, email: { equals: email, mode: 'insensitive' } },
         });
         if (byEmail) {
             // Vincula a identidade Google à conta existente, preservando o papel atual.
             return tx.user.update({ where: { id: byEmail.id }, data: { googleId } });
         }
         return tx.user.create({
-            data: { name, email, googleId, role: 'CLIENT' },
+            data: { name, email, googleId, role: 'CLIENT', tenantId },
         });
     });
     return sessionFor(user);
@@ -121,7 +207,7 @@ async function loginWithGoogle(code) {
 function sessionFor(user) {
     return {
         accessToken: tokenFor(user),
-        user: { id: user.id, name: user.name, email: user.email, phone: user.phone ?? null, role: user.role },
+        user: { id: user.id, name: user.name, email: user.email, phone: user.phone ?? null, role: user.role, tenantId: user.tenantId },
     };
 }
 function tokenFor(user) {
@@ -135,6 +221,8 @@ function tokenFor(user) {
         sub: user.id,
         name: user.name,
         roles: [user.role],
+        // DEV não carrega tenant (tnt ausente); demais roles sempre têm.
+        ...(user.tenantId ? { tnt: user.tenantId } : {}),
         iat: now,
         exp: now + expirationHours * 3600,
     };

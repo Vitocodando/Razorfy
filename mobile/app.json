@@ -26,6 +26,12 @@
       "expo-secure-store",
       "expo-font",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "O Razorfy usa a câmera para escanear o QR Code de conexão da barbearia."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#f6f5ea",

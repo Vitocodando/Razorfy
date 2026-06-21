@@ -21,7 +21,7 @@ appointmentRouter.post(
   requireRole('CLIENT'),
   asyncHandler(async (req, res) => {
     const body = CreateAppointmentSchema.parse(req.body);
-    const result = await createAppointment(req.user!.id, body);
+    const result = await createAppointment(req.user!.id, body, req.user!.tenantId!);
     res.status(201).json(toAppointmentDto(result.appointment, result.paymentPayload));
   }),
 );

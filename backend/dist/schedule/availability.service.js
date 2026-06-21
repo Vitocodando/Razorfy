@@ -76,12 +76,16 @@ function localDateString(date = new Date()) {
 function dateOnlyUtc(dateStr) {
     return new Date(`${dateStr}T00:00:00.000Z`);
 }
-async function availableStarts(barberId, date, durationMinutes) {
+async function availableStarts(barberId, date, durationMinutes, tenantId) {
     if (durationMinutes <= 0 || durationMinutes > 720) {
         throw new BusinessError_1.BusinessError('INVALID_DURATION', 'A duração deve estar entre 1 e 720 minutos.', 400);
     }
     const barber = await prisma_1.prisma.user.findUnique({ where: { id: barberId } });
     if (!barber || barber.role !== 'BARBER') {
+        throw new BusinessError_1.BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+    }
+    // Isolamento de tenant: barbeiro precisa pertencer à barbearia consultada.
+    if (tenantId && barber.tenantId !== tenantId) {
         throw new BusinessError_1.BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
     }
     const dayOfWeek = isoWeekday(date);

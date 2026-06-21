@@ -115,6 +115,7 @@ scheduleRouter.put('/barbers/:id/slots', authenticate, asyncHandler(async (req, 
       },
       create: {
         barberId: req.params.id,
+        tenantId: barber.tenantId!,
         dayOfWeek: s.dayOfWeek,
         startTime: timeStrToDate(s.startTime),
         endTime: timeStrToDate(s.endTime),

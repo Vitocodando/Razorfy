@@ -15,9 +15,24 @@ exports.authRouter.post('/register', (0, asyncHandler_1.asyncHandler)(async (req
     res.status(201).json(result);
 }));
 exports.authRouter.post('/login', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
-    const { email, password } = auth_schemas_1.LoginSchema.parse(req.body);
-    const result = await (0, auth_service_1.login)(email, password);
+    const { email, password, tenantSlug } = auth_schemas_1.LoginSchema.parse(req.body);
+    const result = await (0, auth_service_1.login)(email, password, tenantSlug);
+    // FA01: 2FA exigido → 202 Accepted com preAuthToken; senão 200 com a sessão.
+    if ('status' in result && result.status === 'REQUIRE_2FA') {
+        res.status(202).json(result);
+        return;
+    }
     res.json(result);
+}));
+// FA01 passo 6/7: troca preAuthToken + código TOTP pelo JWT final.
+exports.authRouter.post('/login/verify-2fa', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) {
+        throw new BusinessError_1.BusinessError('PRE_AUTH_INVALID', 'Token de verificação não fornecido.', 401);
+    }
+    const userId = (0, auth_service_1.consumePreAuthToken)(header.slice(7));
+    const { code } = auth_schemas_1.Verify2faSchema.parse(req.body);
+    res.json(await (0, auth_service_1.verifyLogin2fa)(userId, code));
 }));
 // Indica ao cliente se o login social está disponível neste ambiente.
 exports.authRouter.get('/google/status', (_req, res) => {

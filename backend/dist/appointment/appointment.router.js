@@ -11,7 +11,7 @@ const appointment_service_1 = require("./appointment.service");
 exports.appointmentRouter = (0, express_1.Router)();
 exports.appointmentRouter.post('/', authenticate_1.authenticate, (0, requireRole_1.requireRole)('CLIENT'), (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const body = appointment_schemas_1.CreateAppointmentSchema.parse(req.body);
-    const result = await (0, appointment_service_1.createAppointment)(req.user.id, body);
+    const result = await (0, appointment_service_1.createAppointment)(req.user.id, body, req.user.tenantId);
     res.status(201).json((0, appointment_dto_1.toAppointmentDto)(result.appointment, result.paymentPayload));
 }));
 exports.appointmentRouter.get('/mine', authenticate_1.authenticate, (0, asyncHandler_1.asyncHandler)(async (req, res) => {

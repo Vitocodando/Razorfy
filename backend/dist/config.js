@@ -14,6 +14,8 @@ const Schema = zod_1.z.object({
     JWT_SECRET: zod_1.z.string().min(32),
     JWT_CLIENT_EXPIRATION_HOURS: zod_1.z.coerce.number().default(24),
     JWT_STAFF_EXPIRATION_HOURS: zod_1.z.coerce.number().default(8),
+    // 2FA TOTP (FEAT-076): chave-mestra AES-256-GCM (32 bytes em hex = 64 chars). Ausente => 2FA off.
+    TOTP_ENC_KEY: zod_1.z.string().regex(/^[0-9a-fA-F]{64}$/).optional(),
     CASHBACK_RATE: zod_1.z.coerce.number().default(0.1),
     PAYMENT_HOLD_MINUTES: zod_1.z.coerce.number().int().default(10),
     BUSINESS_TIMEZONE: zod_1.z.string().default('America/Sao_Paulo'),
@@ -24,6 +26,9 @@ const Schema = zod_1.z.object({
     DEV_ADMIN_EMAIL: zod_1.z.string().email().optional(),
     DEV_ADMIN_PASSWORD: zod_1.z.string().optional(),
     DEV_STAFF_PASSWORD: zod_1.z.string().optional(),
+    // Usuário-mestre da plataforma (role DEV, tenant nulo). Seed no boot, nunca via endpoint.
+    DEV_PLATFORM_EMAIL: zod_1.z.string().email().optional(),
+    DEV_PLATFORM_PASSWORD: zod_1.z.string().optional(),
     CRON_SECRET: zod_1.z.string().optional(),
     // Login social Google (OAuth 2.0). Opcionais: ausentes => endpoint /auth/google responde 503.
     // O client_secret é confidencial e nunca deve ser versionado.

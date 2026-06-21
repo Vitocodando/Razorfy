@@ -5,7 +5,7 @@ import { BusinessError } from '../common/BusinessError';
 export async function createReview(clientId: string, data: { appointmentId: string; rating: number; comment?: string }) {
   const appt = await prisma.appointment.findUnique({
     where: { id: data.appointmentId },
-    select: { id: true, clientId: true, barberId: true, status: true },
+    select: { id: true, clientId: true, barberId: true, status: true, tenantId: true },
   });
   if (!appt) throw new BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
   if (appt.clientId !== clientId) {
@@ -23,6 +23,7 @@ export async function createReview(clientId: string, data: { appointmentId: stri
         appointmentId: appt.id,
         barberId: appt.barberId,
         clientId: appt.clientId,
+        tenantId: appt.tenantId,
         rating: data.rating,
         comment: data.comment?.trim() || null,
       },
@@ -34,6 +35,7 @@ export async function createReview(clientId: string, data: { appointmentId: stri
           appointmentId: appt.id,
           alertType: 'BAD_REVIEW',
           status: 'PENDING',
+          tenantId: appt.tenantId,
         },
       });
     }

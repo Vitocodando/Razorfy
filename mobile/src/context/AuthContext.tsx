@@ -10,29 +10,39 @@ import {
 import type { PropsWithChildren } from 'react';
 import { Platform } from 'react-native';
 import { api } from '../services/api';
-import type { Session } from '../types';
+import type { Barbershop, Session } from '../types';
 
 const SESSION_KEY = 'razorfy.session';
+const TENANT_KEY = 'razorfy.tenant';
 
-const sessionStorage = {
-  get: () =>
-    Platform.OS === 'web'
-      ? Promise.resolve(globalThis.localStorage?.getItem(SESSION_KEY) ?? null)
-      : SecureStore.getItemAsync(SESSION_KEY),
-  set: (value: string) =>
-    Platform.OS === 'web'
-      ? Promise.resolve(globalThis.localStorage?.setItem(SESSION_KEY, value))
-      : SecureStore.setItemAsync(SESSION_KEY, value),
-  remove: () =>
-    Platform.OS === 'web'
-      ? Promise.resolve(globalThis.localStorage?.removeItem(SESSION_KEY))
-      : SecureStore.deleteItemAsync(SESSION_KEY),
-};
+function makeStore(key: string) {
+  return {
+    get: () =>
+      Platform.OS === 'web'
+        ? Promise.resolve(globalThis.localStorage?.getItem(key) ?? null)
+        : SecureStore.getItemAsync(key),
+    set: (value: string) =>
+      Platform.OS === 'web'
+        ? Promise.resolve(globalThis.localStorage?.setItem(key, value))
+        : SecureStore.setItemAsync(key, value),
+    remove: () =>
+      Platform.OS === 'web'
+        ? Promise.resolve(globalThis.localStorage?.removeItem(key))
+        : SecureStore.deleteItemAsync(key),
+  };
+}
+
+const sessionStorage = makeStore(SESSION_KEY);
+const tenantStorage = makeStore(TENANT_KEY);
 
 type AuthContextValue = {
   session: Session | null;
+  tenant: Barbershop | null;
   restoring: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  selectTenant: (tenant: Barbershop) => Promise<void>;
+  clearTenant: () => Promise<void>;
+  login: (email: string, password: string) => Promise<{ require2fa: boolean; preAuthToken?: string }>;
+  verify2fa: (preAuthToken: string, code: string) => Promise<void>;
   register: (
     name: string,
     email: string,
@@ -46,14 +56,17 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
+  const [tenant, setTenant] = useState<Barbershop | null>(null);
   const [restoring, setRestoring] = useState(true);
 
   useEffect(() => {
-    sessionStorage
-      .get()
-      .then((stored) => {
-        if (!stored) return;
-        const parsed = JSON.parse(stored) as Session;
+    Promise.all([sessionStorage.get(), tenantStorage.get()])
+      .then(([storedSession, storedTenant]) => {
+        if (storedTenant) {
+          try { setTenant(JSON.parse(storedTenant) as Barbershop); } catch { /* ignora */ }
+        }
+        if (!storedSession) return;
+        const parsed = JSON.parse(storedSession) as Session;
         if (new Date(parsed.expiresAt).getTime() > Date.now()) {
           setSession(parsed);
         } else {
@@ -69,9 +82,32 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setSession(nextSession);
   }, []);
 
+  const selectTenant = useCallback(async (next: Barbershop) => {
+    await tenantStorage.set(JSON.stringify(next));
+    setTenant(next);
+  }, []);
+
+  const clearTenant = useCallback(async () => {
+    await tenantStorage.remove();
+    setTenant(null);
+  }, []);
+
   const login = useCallback(
     async (email: string, password: string) => {
-      await persist(await api.login(email.trim(), password));
+      const r = await api.login(email.trim(), password, tenant?.slug);
+      // FA01: 2FA exigido → não persiste; devolve token intermediário para a tela de código.
+      if ('status' in r && r.status === 'REQUIRE_2FA') {
+        return { require2fa: true, preAuthToken: r.preAuthToken };
+      }
+      await persist(r as Session);
+      return { require2fa: false };
+    },
+    [persist, tenant],
+  );
+
+  const verify2fa = useCallback(
+    async (preAuthToken: string, code: string) => {
+      await persist(await api.verify2fa(preAuthToken, code));
     },
     [persist],
   );
@@ -79,10 +115,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const register = useCallback(
     async (name: string, email: string, phone: string, password: string) => {
       await persist(
-        await api.register(name.trim(), email.trim(), phone.trim(), password),
+        await api.register(name.trim(), email.trim(), phone.trim(), password, tenant?.slug),
       );
     },
-    [persist],
+    [persist, tenant],
   );
 
   const logout = useCallback(async () => {
@@ -91,8 +127,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, []);
 
   const value = useMemo(
-    () => ({ session, restoring, login, register, logout }),
-    [session, restoring, login, register, logout],
+    () => ({ session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, register, logout }),
+    [session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, register, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

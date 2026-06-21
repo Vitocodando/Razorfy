@@ -14,12 +14,13 @@ export async function createExpressBlock(barberId: string, durationMinutes: Bloc
   const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
 
   return prisma.$transaction(async tx => {
-    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string }>>`
-      SELECT id, role FROM users WHERE id = ${barberId}::uuid FOR UPDATE
+    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string; tenant_id: string }>>`
+      SELECT id, role, tenant_id FROM users WHERE id = ${barberId}::uuid FOR UPDATE
     `;
     if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
       throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
     }
+    const barberTenantId = barberRows[0].tenant_id;
 
     const conflictAppt = await tx.appointment.findFirst({
       where: {
@@ -71,7 +72,7 @@ export async function createExpressBlock(barberId: string, durationMinutes: Bloc
     }
 
     return tx.scheduleBlock.create({
-      data: { barberId, startTimestamp: start, endTimestamp: end, reason: reason ?? null },
+      data: { barberId, tenantId: barberTenantId, startTimestamp: start, endTimestamp: end, reason: reason ?? null },
     });
   });
 }

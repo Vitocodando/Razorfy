@@ -106,6 +106,7 @@ exports.scheduleRouter.put('/barbers/:id/slots', authenticate_1.authenticate, (0
             },
             create: {
                 barberId: req.params.id,
+                tenantId: barber.tenantId,
                 dayOfWeek: s.dayOfWeek,
                 startTime: timeStrToDate(s.startTime),
                 endTime: timeStrToDate(s.endTime),

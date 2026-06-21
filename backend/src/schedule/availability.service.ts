@@ -78,13 +78,17 @@ export function dateOnlyUtc(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00.000Z`);
 }
 
-export async function availableStarts(barberId: string, date: string, durationMinutes: number): Promise<Date[]> {
+export async function availableStarts(barberId: string, date: string, durationMinutes: number, tenantId?: string): Promise<Date[]> {
   if (durationMinutes <= 0 || durationMinutes > 720) {
     throw new BusinessError('INVALID_DURATION', 'A duração deve estar entre 1 e 720 minutos.', 400);
   }
 
   const barber = await prisma.user.findUnique({ where: { id: barberId } });
   if (!barber || barber.role !== 'BARBER') {
+    throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+  }
+  // Isolamento de tenant: barbeiro precisa pertencer à barbearia consultada.
+  if (tenantId && barber.tenantId !== tenantId) {
     throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
   }
 

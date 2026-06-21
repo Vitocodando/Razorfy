@@ -2,6 +2,8 @@ import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { prisma } from '../prisma';
 import { BusinessError } from '../common/BusinessError';
+import { encryptSecret, decryptSecret } from '../common/crypto';
+import { generateSecret, buildOtpAuthUri, verifyCode } from '../auth/twofa.service';
 
 const FUTURE_BLOCKING = ['CONFIRMED', 'PENDING_PAYMENT'];
 
@@ -22,7 +24,54 @@ function publicUser(u: {
 export async function getMe(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
-  return { ...publicUser(user), role: user.role, hasPassword: user.password !== null };
+  // RN03: nunca expõe totp_secret; apenas o flag de status.
+  return { ...publicUser(user), role: user.role, hasPassword: user.password !== null, is2faEnabled: user.is2faEnabled };
+}
+
+// FEAT-076 RF01: gera segredo TOTP (pendente, criptografado) e a URI otpauth para o QR.
+export async function setup2fa(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
+  if (user.is2faEnabled) throw new BusinessError('2FA_ALREADY_ENABLED', 'A autenticação em duas etapas já está ativa.', 409);
+
+  const secret = generateSecret();
+  const tenant = user.tenantId
+    ? await prisma.barbershop.findUnique({ where: { id: user.tenantId }, select: { name: true } })
+    : null;
+  const otpAuthUri = buildOtpAuthUri(secret, user.email, tenant?.name);
+
+  // Persiste o segredo criptografado como pendente (is2faEnabled permanece false).
+  await prisma.user.update({ where: { id: userId }, data: { totpSecret: encryptSecret(secret) } });
+  return { otpAuthUri, manualSecretKey: secret };
+}
+
+// RF02 / RN02: ativa o 2FA somente após provar o primeiro código válido.
+export async function enable2fa(userId: string, code: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
+  if (user.is2faEnabled) throw new BusinessError('2FA_ALREADY_ENABLED', 'A autenticação em duas etapas já está ativa.', 409);
+  if (!user.totpSecret) throw new BusinessError('2FA_SETUP_REQUIRED', 'Inicie a configuração do 2FA antes de ativar.', 409);
+
+  if (!verifyCode(code, decryptSecret(user.totpSecret))) {
+    throw new BusinessError('INVALID_TOTP_CODE', 'Código inválido. Verifique o app autenticador.', 401);
+  }
+  await prisma.user.update({ where: { id: userId }, data: { is2faEnabled: true } });
+}
+
+// RF03 / CT02: desativa exigindo senha atual E código TOTP válido (prova de posse do dispositivo).
+export async function disable2fa(userId: string, currentPassword: string, code: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
+  if (!user.is2faEnabled || !user.totpSecret) {
+    throw new BusinessError('2FA_NOT_ENABLED', 'A autenticação em duas etapas não está ativa.', 409);
+  }
+  if (!user.password || !(await bcrypt.compare(currentPassword, user.password))) {
+    throw new BusinessError('CURRENT_PASSWORD_INVALID', 'Senha atual incorreta.', 401);
+  }
+  if (!verifyCode(code, decryptSecret(user.totpSecret))) {
+    throw new BusinessError('INVALID_TOTP_CODE', 'Código inválido. Verifique o app autenticador.', 401);
+  }
+  await prisma.user.update({ where: { id: userId }, data: { is2faEnabled: false, totpSecret: null } });
 }
 
 // RF01: atualiza nome/telefone e preferências de notificação. user_id vem do JWT (anti-IDOR).

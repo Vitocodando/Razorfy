@@ -1,12 +1,28 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, InputHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import { QRCodeCanvas } from 'qrcode.react'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 
 // ---------- Tipos ----------
 
-type User = { id: string; name: string; email: string; phone: string | null; role: string }
+type User = { id: string; name: string; email: string; phone: string | null; role: string; tenantId?: string }
 type Session = { accessToken: string; user: User }
+type Barbershop = { id: string; name: string; slug: string; connectionCode?: string; logoUrl?: string | null }
+type ConnectResult = { tenantId: string; name: string; slug: string; connectionCode: string; logoUrl: string | null }
+
+// Extrai código de conexão de texto cru ou deep-link (barberflow://connect/X, .../c/X).
+function parseConnectionCode(raw: string): string {
+  const t = raw.trim()
+  const m = t.match(/(?:\/c\/|\/connect\/)([A-Za-z0-9]+)/)
+  return (m ? m[1] : t).trim().toUpperCase()
+}
+
+// Conecta pelo código: backend valida formato/existência/atividade.
+async function connectByCode(code: string): Promise<Barbershop> {
+  const r = await request<ConnectResult>(`/tenants/connect/${encodeURIComponent(code)}`)
+  return { id: r.tenantId, name: r.name, slug: r.slug, connectionCode: r.connectionCode, logoUrl: r.logoUrl }
+}
 type ServiceItem = { id: string; name: string; durationMinutes: number; price: number }
 type Barber = { id: string; name: string }
 type Appointment = {
@@ -509,6 +525,13 @@ function App() {
     return parsed?.user?.role === 'BARBER' ? 'agenda' : 'home'
   })
   const [selectedServices, setSelectedServices] = useState<string[]>([])
+  const [tenant, setTenant] = useState<Barbershop | null>(() => {
+    const saved = localStorage.getItem('razorfy.tenant')
+    return saved ? (JSON.parse(saved) as Barbershop) : null
+  })
+
+  const selectTenant = (t: Barbershop) => { localStorage.setItem('razorfy.tenant', JSON.stringify(t)); setTenant(t) }
+  const clearTenant = () => { localStorage.removeItem('razorfy.tenant'); setTenant(null) }
 
   const signIn = (nextSession: Session) => {
     localStorage.setItem('razorfy.session', JSON.stringify(nextSession))
@@ -538,6 +561,28 @@ function App() {
     const onUnauthorized = () => signOut()
     window.addEventListener('razorfy:unauthorized', onUnauthorized)
     return () => window.removeEventListener('razorfy:unauthorized', onUnauthorized)
+  }, [])
+
+  // Deep-link da barbearia: /c/:code (FEAT-074, conexão por código) ou /app/:slug (legado).
+  const [deepLink, setDeepLink] = useState<{ resolving: boolean }>(() => ({
+    resolving: /^\/(c|app)\/[^/]+\/?$/.test(window.location.pathname),
+  }))
+  useEffect(() => {
+    const path = window.location.pathname
+    const byCode = path.match(/^\/c\/([^/]+)\/?$/)
+    const bySlug = path.match(/^\/app\/([^/]+)\/?$/)
+    if (!byCode && !bySlug) return
+    const resolve = byCode
+      ? connectByCode(parseConnectionCode(decodeURIComponent(byCode[1])))
+      : request<Barbershop>(`/barbershops/${decodeURIComponent(bySlug![1])}`)
+    resolve
+      .then((shop) => selectTenant(shop))
+      .catch(() => { /* código/slug inválido ou inativo → cai na tela de conexão */ })
+      .finally(() => {
+        window.history.replaceState({}, '', '/')
+        setDeepLink({ resolving: false })
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Callback do OAuth Google: troca o authorization code por sessão.
@@ -578,13 +623,37 @@ function App() {
     )
   }
 
-  if (!session) return <AuthScreen onAuthenticated={signIn} initialError={oauth.error} />
+  if (deepLink.resolving) {
+    return (
+      <div className="bg-background min-h-screen flex flex-col items-center justify-center gap-4">
+        <Icon name="progress_activity" className="text-[40px] text-primary animate-spin" />
+        <p className="text-[16px] text-on-surface-variant">Abrindo a barbearia...</p>
+      </div>
+    )
+  }
+
+  // Backoffice mestre (FEAT-075): rota obscura /platform, sem discovery de tenant.
+  const isPlatformRoute = window.location.pathname.startsWith('/platform')
+
+  // DEV autenticado → console da plataforma, ignorando o gate de tenant.
+  if (session && session.user.role === 'DEV') {
+    return <PlatformConsole session={session} onSignOut={signOut} />
+  }
+
+  if (!session) {
+    if (isPlatformRoute) return <DevLoginScreen onAuthenticated={signIn} />
+    if (!tenant) return <TenantDiscovery onSelect={selectTenant} />
+    return <AuthScreen onAuthenticated={signIn} initialError={oauth.error} tenant={tenant} onChangeTenant={clearTenant} />
+  }
+
+  const activeTenantId = session.user.tenantId ?? tenant?.id
 
   // Fluxo de agendamento (etapa 2) ocupa a tela toda, sem menu
   if (screen === 'calendar') {
     return (
       <CalendarPage
         session={session}
+        tenantId={activeTenantId}
         selectedServiceIds={selectedServices}
         onBack={() => setScreen('home')}
         onBooked={() => setSelectedServices([])}
@@ -603,6 +672,7 @@ function App() {
       <AdminCommandCenter session={session} />
     ) : nav === 'home' ? (
       <HomePage
+        tenantId={activeTenantId}
         selectedServices={selectedServices}
         onToggleService={(id) =>
           setSelectedServices((current) =>
@@ -621,13 +691,227 @@ function App() {
     ) : nav === 'schedule' ? (
       <BarberSchedulePage session={session} />
     ) : nav === 'settings' ? (
-      <SettingsPage session={session} onSignOut={signOut} onProfileChange={(u) => updateSessionUser(u)} />
+      <SettingsPage session={session} onSignOut={signOut} onDisconnect={() => { clearTenant(); signOut() }} onProfileChange={(u) => updateSessionUser(u)} />
     ) : null
 
   return (
     <AppShell active={nav} navItems={navItems} onNavigate={setNav} onLogout={signOut}>
       {page}
     </AppShell>
+  )
+}
+
+// ---------- Backoffice mestre (DEV / plataforma) — FEAT-075 ----------
+
+type PlatformAdminContact = { name: string; email: string; phone: string | null }
+type PlatformTenant = {
+  tenantId: string
+  name: string
+  connectionCode: string
+  isActive: boolean
+  createdAt: string
+  adminContact: PlatformAdminContact | null
+}
+type PlatformList = { content: PlatformTenant[]; totalPages: number; totalElements: number }
+
+// Login restrito do proprietário da plataforma (sem seleção de barbearia).
+function DevLoginScreen({ onAuthenticated }: { onAuthenticated: (s: Session) => void }) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [pending2fa, setPending2fa] = useState<string | null>(null)
+
+  function accept(s: Session) {
+    if (s.user.role !== 'DEV') { setError('Esta área é exclusiva da plataforma.'); setBusy(false); return }
+    onAuthenticated(s)
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError('')
+    try {
+      const r = await request<Session | { status: 'REQUIRE_2FA'; preAuthToken: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email: email.trim(), password }) })
+      if ('status' in r && r.status === 'REQUIRE_2FA') { setPending2fa(r.preAuthToken); setBusy(false); return }
+      accept(r as Session)
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Falha no login.')
+      setBusy(false)
+    }
+  }
+
+  if (pending2fa) {
+    return <TwoFactorLoginScreen preAuthToken={pending2fa} onAuthenticated={accept} onCancel={() => { setPending2fa(null); setBusy(false) }} />
+  }
+
+  return (
+    <div className="min-h-screen bg-[#0b0b0f] flex flex-col items-center justify-center p-4">
+      <form onSubmit={submit} className="w-full max-w-[360px] flex flex-col gap-3">
+        <div className="text-center mb-2">
+          <Icon name="shield_person" className="text-[40px] text-primary" />
+          <h1 className="text-[20px] font-bold text-white mt-2">Backoffice Razorfy</h1>
+          <p className="text-[12px] text-white/50">Acesso restrito ao proprietário da plataforma.</p>
+        </div>
+        {error && <ErrorBanner message={error} />}
+        <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoFocus placeholder="E-mail da plataforma" className="h-12 px-4 rounded-xl bg-white/5 border border-white/15 text-white text-[14px] placeholder:text-white/30 focus:outline-none focus:border-primary" />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="Senha" className="h-12 px-4 rounded-xl bg-white/5 border border-white/15 text-white text-[14px] placeholder:text-white/30 focus:outline-none focus:border-primary" />
+        <button disabled={busy || !email || !password} className="h-12 rounded-xl bg-primary text-on-primary font-bold text-[14px] disabled:opacity-50 flex items-center justify-center gap-2">
+          {busy ? <Icon name="progress_activity" className="animate-spin text-[20px]" /> : 'Entrar'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+  const token = session.accessToken
+  const [data, setData] = useState<PlatformList | null>(null)
+  const [page, setPage] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const size = 20
+
+  const load = (p = page) => {
+    setLoading(true)
+    request<PlatformList>(`/platform/tenants?page=${p}&size=${size}`, {}, token)
+      .then(setData)
+      .catch((c) => setError(c instanceof Error ? c.message : 'Falha ao carregar barbearias.'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { load(page); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [page])
+
+  async function toggleStatus(t: PlatformTenant) {
+    const next = !t.isActive
+    if (next === false && !confirm(`Bloquear "${t.name}"? Todos os usuários desta barbearia perdem acesso imediatamente.`)) return
+    setError(''); setSuccess('')
+    try {
+      await request(`/platform/tenants/${t.tenantId}/status`, { method: 'PATCH', body: JSON.stringify({ isActive: next }) }, token)
+      setSuccess(next ? `${t.name} reativada.` : `${t.name} bloqueada.`)
+      load()
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Não foi possível alterar o status.')
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#0b0b0f] text-white">
+      <header className="flex items-center justify-between px-5 h-16 border-b border-white/10">
+        <div className="flex items-center gap-2">
+          <Icon name="shield_person" className="text-primary text-[24px]" />
+          <span className="font-bold text-[15px]">Backoffice Razorfy</span>
+          <span className="text-[11px] text-white/40 ml-2">{data?.totalElements ?? 0} barbearias</span>
+        </div>
+        <button onClick={onSignOut} className="text-[13px] text-white/60 hover:text-white inline-flex items-center gap-1.5">
+          <Icon name="logout" className="text-[18px]" />Sair
+        </button>
+      </header>
+
+      <main className="max-w-[960px] mx-auto p-5 flex flex-col gap-4">
+        {error && <ErrorBanner message={error} />}
+        {success && <div className="rounded-lg bg-primary/15 border border-primary/30 text-primary px-4 py-2 text-[13px]">{success}</div>}
+
+        <div className="flex items-center justify-between">
+          <h1 className="text-[18px] font-bold">Barbearias (Tenants)</h1>
+          <button onClick={() => setShowForm((v) => !v)} className="h-10 px-4 rounded-lg bg-primary text-on-primary font-bold text-[13px] inline-flex items-center gap-2">
+            <Icon name={showForm ? 'close' : 'add'} className="text-[18px]" />
+            {showForm ? 'Cancelar' : 'Nova barbearia'}
+          </button>
+        </div>
+
+        {showForm && (
+          <PlatformCreateForm
+            token={token}
+            onCreated={(msg) => { setShowForm(false); setSuccess(msg); setPage(0); load(0) }}
+          />
+        )}
+
+        {loading ? (
+          <div className="flex flex-col gap-2">{[1, 2, 3].map((i) => <div key={i} className="h-16 bg-white/5 rounded-lg animate-pulse" />)}</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {data?.content.map((t) => (
+              <div key={t.tenantId} className="flex items-center gap-3 p-4 rounded-lg bg-white/5 border border-white/10">
+                <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${t.isActive ? 'bg-emerald-400' : 'bg-red-500'}`} title={t.isActive ? 'Ativa' : 'Bloqueada'} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-[14px] truncate">{t.name}</p>
+                    <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-white/70">{t.connectionCode}</span>
+                  </div>
+                  <p className="text-[11px] text-white/40 truncate">
+                    {t.adminContact ? `${t.adminContact.name} · ${t.adminContact.email}` : 'sem admin'}
+                  </p>
+                </div>
+                <button
+                  onClick={() => toggleStatus(t)}
+                  className={`h-9 px-3 rounded-lg text-[12px] font-semibold inline-flex items-center gap-1.5 ${t.isActive ? 'border border-red-500/40 text-red-400 hover:bg-red-500/10' : 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-400'}`}
+                >
+                  <Icon name={t.isActive ? 'block' : 'check_circle'} className="text-[16px]" />
+                  {t.isActive ? 'Bloquear' : 'Reativar'}
+                </button>
+              </div>
+            ))}
+            {data && data.content.length === 0 && <p className="text-white/40 text-[13px] text-center py-8">Nenhuma barbearia cadastrada.</p>}
+          </div>
+        )}
+
+        {data && data.totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="h-9 px-3 rounded-lg bg-white/5 text-[13px] disabled:opacity-30">Anterior</button>
+            <span className="text-[12px] text-white/50">Página {page + 1} de {data.totalPages}</span>
+            <button disabled={page + 1 >= data.totalPages} onClick={() => setPage((p) => p + 1)} className="h-9 px-3 rounded-lg bg-white/5 text-[13px] disabled:opacity-30">Próxima</button>
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+function PlatformCreateForm({ token, onCreated }: { token: string; onCreated: (msg: string) => void }) {
+  const [f, setF] = useState({ name: '', slug: '', connectionCode: '', adminName: '', email: '', phone: '', password: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }))
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError('')
+    try {
+      const r = await request<{ message: string }>('/platform/tenants', {
+        method: 'POST',
+        body: JSON.stringify({
+          tenant: { name: f.name.trim(), slug: f.slug.trim(), connectionCode: f.connectionCode.trim() },
+          adminUser: { name: f.adminName.trim(), email: f.email.trim(), phone: f.phone.trim(), initialPassword: f.password },
+        }),
+      }, token)
+      onCreated(r.message)
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Não foi possível criar a barbearia.')
+    } finally { setBusy(false) }
+  }
+
+  const input = 'h-11 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] placeholder:text-white/30 focus:outline-none focus:border-primary'
+  return (
+    <form onSubmit={submit} className="rounded-xl bg-white/5 border border-white/10 p-4 flex flex-col gap-3">
+      {error && <ErrorBanner message={error} />}
+      <p className="text-[12px] font-semibold text-white/60 uppercase tracking-wider">Estabelecimento</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <input className={input} placeholder="Nome" value={f.name} onChange={(e) => set('name', e.target.value)} />
+        <input className={input} placeholder="slug (ex: navalha-classica)" value={f.slug} onChange={(e) => set('slug', e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
+        <input className={input} placeholder="CÓDIGO" maxLength={10} value={f.connectionCode} onChange={(e) => set('connectionCode', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} />
+      </div>
+      <p className="text-[12px] font-semibold text-white/60 uppercase tracking-wider mt-1">Dono (Admin)</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <input className={input} placeholder="Nome do dono" value={f.adminName} onChange={(e) => set('adminName', e.target.value)} />
+        <input className={input} type="email" placeholder="E-mail" value={f.email} onChange={(e) => set('email', e.target.value)} />
+        <input className={input} placeholder="Telefone (+55...)" value={f.phone} onChange={(e) => set('phone', e.target.value)} />
+        <input className={input} type="password" placeholder="Senha inicial (mín. 8)" value={f.password} onChange={(e) => set('password', e.target.value)} />
+      </div>
+      <button disabled={busy} className="h-11 rounded-lg bg-primary text-on-primary font-bold text-[13px] disabled:opacity-50 inline-flex items-center justify-center gap-2 mt-1">
+        {busy ? <Icon name="progress_activity" className="animate-spin text-[18px]" /> : <><Icon name="add_business" className="text-[18px]" />Criar barbearia + admin</>}
+      </button>
+    </form>
   )
 }
 
@@ -680,12 +964,196 @@ function AuthDivider() {
   )
 }
 
-function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (session: Session) => void; initialError?: string }) {
+// FEAT-074: conexão por código/QR (substitui busca aberta). RN02 case-insensitive (uppercase mask).
+function TenantDiscovery({ onSelect }: { onSelect: (t: Barbershop) => void }) {
+  const [code, setCode] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [scanning, setScanning] = useState(false)
+
+  const submit = async (raw: string) => {
+    const c = parseConnectionCode(raw)
+    if (!c) { setError('Digite o código de conexão.'); return }
+    setLoading(true)
+    setError('')
+    try {
+      onSelect(await connectByCode(c))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Não foi possível conectar.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-background min-h-screen flex flex-col items-center p-4">
+      <main className="w-full max-w-[420px] flex flex-col items-center pt-10">
+        <img alt="Razorfy" src="/razorfy.png" className="w-28 h-28 object-contain mb-4 drop-shadow-sm" />
+        <h1 className="text-[24px] font-bold text-on-surface mb-1 text-center">Conecte-se à barbearia</h1>
+        <p className="text-[14px] text-on-surface-variant mb-6 text-center">Informe o código de conexão ou escaneie o QR Code fornecido pela barbearia.</p>
+
+        {scanning ? (
+          <QrScanner
+            onDetected={(text) => { setScanning(false); submit(text) }}
+            onClose={() => setScanning(false)}
+          />
+        ) : (
+          <>
+            <form className="w-full" onSubmit={(e) => { e.preventDefault(); submit(code) }}>
+              <input
+                autoFocus
+                value={code}
+                onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                placeholder="EX: BARBA55"
+                maxLength={10}
+                className="w-full h-14 px-4 mb-3 bg-surface-container-lowest border border-on-surface/15 rounded-xl text-[20px] tracking-[0.25em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary uppercase"
+              />
+              {error && <div className="w-full mb-3"><ErrorBanner message={error} /></div>}
+              <button
+                type="submit"
+                disabled={loading || !code}
+                className="w-full h-12 rounded-xl bg-primary text-on-primary font-bold text-[15px] disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {loading ? <Icon name="progress_activity" className="animate-spin text-[20px]" /> : 'Conectar'}
+              </button>
+            </form>
+            <button
+              onClick={() => { setError(''); setScanning(true) }}
+              className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container text-on-surface text-[14px] font-semibold hover:bg-surface-container-high transition-colors"
+            >
+              <Icon name="qr_code_scanner" className="text-[20px]" />
+              Escanear QR Code
+            </button>
+          </>
+        )}
+      </main>
+    </div>
+  )
+}
+
+// Scanner QR via BarcodeDetector nativo. Fallback gracioso: se indisponível, fecha e usa código manual.
+function QrScanner({ onDetected, onClose }: { onDetected: (text: string) => void; onClose: () => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const BD = (window as unknown as { BarcodeDetector?: new (o?: { formats?: string[] }) => { detect: (s: CanvasImageSource) => Promise<{ rawValue: string }[]> } }).BarcodeDetector
+    if (!BD) { setError('Câmera/leitor de QR não suportado neste navegador. Digite o código manualmente.'); return }
+    let stream: MediaStream | null = null
+    let raf = 0
+    let stopped = false
+    const detector = new BD({ formats: ['qr_code'] })
+    ;(async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        if (stopped) { stream.getTracks().forEach((t) => t.stop()); return }
+        const v = videoRef.current
+        if (!v) return
+        v.srcObject = stream
+        await v.play()
+        const tick = async () => {
+          if (stopped || !videoRef.current) return
+          try {
+            const codes = await detector.detect(videoRef.current)
+            if (codes.length > 0) { onDetected(codes[0].rawValue); return }
+          } catch { /* frame sem leitura */ }
+          raf = requestAnimationFrame(tick)
+        }
+        raf = requestAnimationFrame(tick)
+      } catch {
+        setError('Não foi possível acessar a câmera. Verifique as permissões ou digite o código.')
+      }
+    })()
+    return () => {
+      stopped = true
+      cancelAnimationFrame(raf)
+      stream?.getTracks().forEach((t) => t.stop())
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="w-full flex flex-col items-center">
+      {error ? (
+        <ErrorBanner message={error} />
+      ) : (
+        <div className="relative w-full aspect-square rounded-2xl overflow-hidden bg-black">
+          <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+          <div className="absolute inset-8 border-2 border-white/80 rounded-xl pointer-events-none" />
+        </div>
+      )}
+      <button
+        onClick={onClose}
+        className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container text-on-surface text-[14px] font-semibold hover:bg-surface-container-high transition-colors"
+      >
+        <Icon name="keyboard" className="text-[20px]" />
+        Digitar código
+      </button>
+    </div>
+  )
+}
+
+// FEAT-076 FA01: tela de verificação 2FA no login (após credenciais válidas).
+function TwoFactorLoginScreen({ preAuthToken, onAuthenticated, onCancel }: {
+  preAuthToken: string
+  onAuthenticated: (session: Session) => void
+  onCancel: () => void
+}) {
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    setLoading(true); setError('')
+    try {
+      const s = await request<Session>('/auth/login/verify-2fa', { method: 'POST', body: JSON.stringify({ code }) }, preAuthToken)
+      onAuthenticated(s)
+    } catch (c) {
+      setError(c instanceof Error ? c.message : 'Código inválido.')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
+      <main className="w-full max-w-[360px] flex flex-col items-center">
+        <Icon name="encrypted" className="text-[44px] text-primary mb-3" />
+        <h1 className="text-[20px] font-bold text-on-surface text-center">Verificação em duas etapas</h1>
+        <p className="text-[13px] text-on-surface-variant text-center mb-5">Digite o código de 6 dígitos do seu app autenticador.</p>
+        <form className="w-full flex flex-col gap-3" onSubmit={submit}>
+          <ErrorBanner message={error} />
+          <input
+            autoFocus
+            inputMode="numeric"
+            value={code}
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            placeholder="000000"
+            maxLength={6}
+            className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[26px] tracking-[0.5em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary"
+          />
+          <PrimaryButton type="submit" disabled={loading || code.length !== 6}>
+            {loading ? 'Verificando...' : 'Verificar'}
+          </PrimaryButton>
+          <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar ao login</button>
+        </form>
+      </main>
+    </div>
+  )
+}
+
+function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant }: {
+  onAuthenticated: (session: Session) => void
+  initialError?: string
+  tenant: Barbershop
+  onChangeTenant: () => void
+}) {
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [error, setError] = useState(initialError)
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [googleEnabled, setGoogleEnabled] = useState(false)
+  const [pending2fa, setPending2fa] = useState<string | null>(null) // preAuthToken
 
   useEffect(() => {
     request<{ enabled: boolean }>('/auth/google/status')
@@ -704,16 +1172,26 @@ function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (
           email: form.get('email'),
           phone: form.get('phone'),
           password: form.get('password'),
+          tenantSlug: tenant.slug,
         }
-      : { email: form.get('email'), password: form.get('password') }
+      : { email: form.get('email'), password: form.get('password'), tenantSlug: tenant.slug }
     try {
-      const result = await request<Session>(`/auth/${mode}`, { method: 'POST', body: JSON.stringify(body) })
-      onAuthenticated(result)
+      const result = await request<Session | { status: 'REQUIRE_2FA'; preAuthToken: string }>(`/auth/${mode}`, { method: 'POST', body: JSON.stringify(body) })
+      // FA01: 2FA exigido → vai para a tela de código (não abre sessão ainda).
+      if ('status' in result && result.status === 'REQUIRE_2FA') {
+        setPending2fa(result.preAuthToken)
+        return
+      }
+      onAuthenticated(result as Session)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Falha ao autenticar.')
     } finally {
       setLoading(false)
     }
+  }
+
+  if (pending2fa) {
+    return <TwoFactorLoginScreen preAuthToken={pending2fa} onAuthenticated={onAuthenticated} onCancel={() => { setPending2fa(null); setError('') }} />
   }
 
   const passwordToggle = (
@@ -734,9 +1212,14 @@ function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (
           <div className="mb-6 w-44 h-44 flex items-center justify-center">
             <img alt="Razorfy" src="/razorfy.png" className="object-contain w-full h-full drop-shadow-sm" />
           </div>
-          <h1 className="text-on-background text-[20px] font-semibold text-center mb-8">
+          <h1 className="text-on-background text-[20px] font-semibold text-center mb-4">
             Seu estilo. Seu horário. Do seu jeito.
           </h1>
+          <button onClick={onChangeTenant} className="mb-6 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container text-on-surface text-[13px] font-semibold hover:bg-surface-container-high transition-colors">
+            <Icon name="storefront" className="text-[16px] text-primary" />
+            {tenant.name}
+            <span className="text-[11px] text-on-surface-variant">· trocar</span>
+          </button>
           <form className="w-full flex flex-col gap-4" onSubmit={submit}>
             <ErrorBanner message={error} />
             <FloatingField label="E-mail" id="email" name="email" type="email" required />
@@ -816,11 +1299,13 @@ function AuthScreen({ onAuthenticated, initialError = '' }: { onAuthenticated: (
 // ---------- Home / Catálogo ----------
 
 function HomePage({
+  tenantId,
   selectedServices,
   onToggleService,
   onSchedule,
   onLogout,
 }: {
+  tenantId?: string
   selectedServices: string[]
   onToggleService: (id: string) => void
   onSchedule: () => void
@@ -831,7 +1316,8 @@ function HomePage({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    request<ServiceItem[]>('/services')
+    const path = tenantId ? `/tenants/${tenantId}/services` : '/services'
+    request<ServiceItem[]>(path)
       .then(setServices)
       .catch((cause) => setError(cause.message))
       .finally(() => setLoading(false))
@@ -1207,15 +1693,18 @@ function BarberParallax({ name, image, subtitle }: { name: string; image?: strin
 
 function CalendarPage({
   session,
+  tenantId,
   selectedServiceIds,
   onBack,
   onBooked,
 }: {
   session: Session
+  tenantId?: string
   selectedServiceIds: string[]
   onBack: () => void
   onBooked: () => void
 }) {
+  const tenantPath = tenantId ? `/tenants/${tenantId}` : ''
   const [services, setServices] = useState<ServiceItem[]>([])
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [wallet, setWallet] = useState<Wallet | null>(null)
@@ -1236,8 +1725,8 @@ function CalendarPage({
 
   useEffect(() => {
     Promise.all([
-      request<ServiceItem[]>('/services'),
-      request<Barber[]>('/barbers'),
+      request<ServiceItem[]>(`${tenantPath}/services`),
+      request<Barber[]>(`${tenantPath}/barbers`),
       request<Wallet>('/wallet', {}, session.accessToken).catch(() => null),
     ]).then(([serviceData, barberData, walletData]) => {
       setServices(serviceData)
@@ -1256,7 +1745,7 @@ function CalendarPage({
     const candidates = barberId ? barbers.filter((b) => b.id === barberId) : barbers
     Promise.all(
       candidates.map((barber) =>
-        request<{ availableStarts: string[] }>(`/barbers/${barber.id}/availability?date=${date}&duration=${duration}`)
+        request<{ availableStarts: string[] }>(`${tenantPath}/barbers/${barber.id}/availability?date=${date}&duration=${duration}`)
           .then((data) => ({ barberId: barber.id, starts: data.availableStarts }))
           .catch(() => ({ barberId: barber.id, starts: [] as string[] })),
       ),
@@ -2052,7 +2541,7 @@ function ClientNotesModal({
 
 // ---------- Centro de Comando (ADMIN) ----------
 
-type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules'
+type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection'
 type GlobalSettingsData = { noShowToleranceMinutes: number; defaultCashbackPct: number }
 
 type AdminBarberRow = {
@@ -2081,11 +2570,13 @@ type MeResponse = {
   notificationWhatsappEnabled: boolean
   role: string
   hasPassword: boolean
+  is2faEnabled: boolean
 }
 
-function SettingsPage({ session, onSignOut, onProfileChange }: {
+function SettingsPage({ session, onSignOut, onDisconnect, onProfileChange }: {
   session: Session
   onSignOut: () => void
+  onDisconnect: () => void
   onProfileChange: (patch: Partial<User>) => void
 }) {
   const token = session.accessToken
@@ -2200,6 +2691,27 @@ function SettingsPage({ session, onSignOut, onProfileChange }: {
               </form>
             )}
 
+            {/* Segurança — 2FA TOTP (FEAT-076) */}
+            {me.hasPassword && (
+              <TwoFactorSettings
+                token={token}
+                enabled={me.is2faEnabled}
+                onChange={(v) => setMe((m) => (m ? { ...m, is2faEnabled: v } : m))}
+              />
+            )}
+
+            {/* Desconectar barbearia (FEAT-074 RN04) — apenas cliente */}
+            {me.role === 'CLIENT' && (
+              <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+                <h2 className="text-[15px] font-bold text-on-surface">Barbearia conectada</h2>
+                <p className="text-[12px] text-on-surface-variant">Desconectar encerra sua sessão e volta para a tela de conexão por código.</p>
+                <button onClick={onDisconnect} className="h-11 rounded-lg border border-on-surface/20 text-[12px] font-semibold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high inline-flex items-center justify-center gap-2">
+                  <Icon name="link_off" className="text-[18px]" />
+                  Desconectar barbearia
+                </button>
+              </div>
+            )}
+
             {/* Excluir conta (apenas cliente) */}
             {me.role === 'CLIENT' && (
               <div className="bg-surface-container-lowest border border-error/30 rounded-xl p-4 flex flex-col gap-3">
@@ -2225,6 +2737,92 @@ function SettingsPage({ session, onSignOut, onProfileChange }: {
   )
 }
 
+// FEAT-076: card de Segurança (2FA) em Configurações. Ativação exige provar o 1º código (RN02).
+function TwoFactorSettings({ token, enabled, onChange }: {
+  token: string
+  enabled: boolean
+  onChange: (v: boolean) => void
+}) {
+  const [setupData, setSetupData] = useState<{ otpAuthUri: string; manualSecretKey: string } | null>(null)
+  const [code, setCode] = useState('')
+  const [disablePwd, setDisablePwd] = useState('')
+  const [showDisable, setShowDisable] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const onlyDigits = (v: string) => v.replace(/\D/g, '').slice(0, 6)
+
+  async function startSetup() {
+    setBusy(true); setError('')
+    try {
+      setSetupData(await request<{ otpAuthUri: string; manualSecretKey: string }>('/users/me/2fa/setup', { method: 'POST' }, token))
+    } catch (c) { setError(c instanceof Error ? c.message : 'Falha ao iniciar 2FA.') } finally { setBusy(false) }
+  }
+  async function confirmEnable(e: FormEvent) {
+    e.preventDefault(); setBusy(true); setError('')
+    try {
+      await request('/users/me/2fa/enable', { method: 'POST', body: JSON.stringify({ code }) }, token)
+      setSetupData(null); setCode(''); onChange(true)
+    } catch (c) { setError(c instanceof Error ? c.message : 'Código inválido.') } finally { setBusy(false) }
+  }
+  async function disable(e: FormEvent) {
+    e.preventDefault(); setBusy(true); setError('')
+    try {
+      await request('/users/me/2fa', { method: 'DELETE', body: JSON.stringify({ currentPassword: disablePwd, code }) }, token)
+      setShowDisable(false); setDisablePwd(''); setCode(''); onChange(false)
+    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível desativar.') } finally { setBusy(false) }
+  }
+
+  const input = 'h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]'
+  return (
+    <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-[15px] font-bold text-on-surface">Verificação em duas etapas</h2>
+        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${enabled ? 'bg-emerald-500/15 text-emerald-600' : 'bg-on-surface/10 text-on-surface-variant'}`}>
+          {enabled ? 'Ativa' : 'Inativa'}
+        </span>
+      </div>
+      <p className="text-[12px] text-on-surface-variant">Proteja sua conta exigindo um código do app autenticador (Google Authenticator, Authy) ao entrar.</p>
+      {error && <ErrorBanner message={error} />}
+
+      {!enabled && !setupData && (
+        <button onClick={startSetup} disabled={busy} className="h-11 rounded-lg bg-secondary text-on-secondary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40 inline-flex items-center justify-center gap-2">
+          <Icon name="add_moderator" className="text-[18px]" />Habilitar 2FA
+        </button>
+      )}
+
+      {!enabled && setupData && (
+        <form onSubmit={confirmEnable} className="flex flex-col items-center gap-3">
+          <p className="text-[12px] text-on-surface-variant self-start">1. Escaneie o QR Code no seu app autenticador:</p>
+          <div className="bg-white p-3 rounded-xl"><QRCodeCanvas value={setupData.otpAuthUri} size={172} level="M" /></div>
+          <p className="text-[11px] text-on-surface-variant self-start">Ou insira manualmente a chave:</p>
+          <code className="text-[12px] font-mono bg-surface-container px-3 py-1.5 rounded-lg break-all w-full text-center">{setupData.manualSecretKey}</code>
+          <p className="text-[12px] text-on-surface-variant self-start">2. Digite o código gerado para confirmar:</p>
+          <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(onlyDigits(e.target.value))} placeholder="000000" maxLength={6} className={`${input} w-full text-center text-[20px] tracking-[0.4em] font-bold`} />
+          <div className="flex gap-2 w-full">
+            <button type="button" onClick={() => { setSetupData(null); setCode('') }} className="flex-1 h-11 rounded-lg border border-on-surface/20 text-[12px] font-semibold text-on-surface-variant">Cancelar</button>
+            <button disabled={busy || code.length !== 6} className="flex-1 h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Ativar</button>
+          </div>
+        </form>
+      )}
+
+      {enabled && !showDisable && (
+        <button onClick={() => { setShowDisable(true); setError('') }} className="h-11 rounded-lg border border-error text-error text-[12px] font-semibold uppercase tracking-wider hover:bg-error-container">Desativar 2FA</button>
+      )}
+      {enabled && showDisable && (
+        <form onSubmit={disable} className="flex flex-col gap-2">
+          <p className="text-[12px] text-on-surface-variant">Confirme com sua senha e um código atual do app:</p>
+          <input type="password" value={disablePwd} onChange={(e) => setDisablePwd(e.target.value)} placeholder="Senha atual" required className={input} />
+          <input inputMode="numeric" value={code} onChange={(e) => setCode(onlyDigits(e.target.value))} placeholder="Código (6 dígitos)" maxLength={6} required className={input} />
+          <div className="flex gap-2">
+            <button type="button" onClick={() => { setShowDisable(false); setDisablePwd(''); setCode('') }} className="flex-1 h-11 rounded-lg border border-on-surface/20 text-[12px] font-semibold text-on-surface-variant">Cancelar</button>
+            <button disabled={busy || !disablePwd || code.length !== 6} className="flex-1 h-11 rounded-lg bg-error text-on-error text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Confirmar</button>
+          </div>
+        </form>
+      )}
+    </div>
+  )
+}
+
 function AdminCommandCenter({ session }: { session: Session }) {
   const token = session.accessToken
   const [date, setDate] = useState(today())
@@ -2239,6 +2837,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
   const [adminServices, setAdminServices] = useState<AdminServiceRow[]>([])
   const [rulesForm, setRulesForm] = useState<GlobalSettingsData>({ noShowToleranceMinutes: 15, defaultCashbackPct: 10 })
   const [settlement, setSettlement] = useState<CommissionSettlement | null>(null)
+  const [shop, setShop] = useState<{ id: string; name: string; slug: string; connectionCode: string; logoUrl: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -2300,6 +2899,15 @@ function AdminCommandCenter({ session }: { session: Session }) {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // FEAT-074: carrega código de conexão sob demanda ao abrir a aba Conexão.
+  useEffect(() => {
+    if (tab !== 'connection' || shop) return
+    request<{ id: string; name: string; slug: string; connectionCode: string; logoUrl: string | null }>('/admin/barbershop', {}, token)
+      .then(setShop)
+      .catch((c) => setError(c instanceof Error ? c.message : 'Não foi possível carregar a conexão.'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])
 
   async function reloadDate(nextDate: string) {
     setDate(nextDate)
@@ -2644,6 +3252,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
                 { key: 'barbers' as const, label: 'Barbeiros', icon: 'group' },
                 { key: 'services' as const, label: 'Serviços', icon: 'content_cut' },
                 { key: 'rules' as const, label: 'Regras', icon: 'tune' },
+                { key: 'connection' as const, label: 'Conexão', icon: 'qr_code_2' },
               ].map((item) => (
                 <button key={item.key} onClick={() => setTab(item.key)} className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap border transition-colors ${tab === item.key ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-lowest text-on-surface-variant border-on-surface/10 hover:text-on-surface'}`}>
                   <Icon name={item.icon} className="text-[16px]" />
@@ -2914,11 +3523,58 @@ function AdminCommandCenter({ session }: { session: Session }) {
                 <button disabled={saving} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Salvar regras</button>
               </form>
             )}
+
+            {tab === 'connection' && (
+              <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-6 flex flex-col items-center gap-4 max-w-md">
+                <h2 className="text-[15px] font-bold text-on-surface self-start">Código de conexão</h2>
+                <p className="text-[12px] text-on-surface-variant self-start">Compartilhe este código ou QR Code para que clientes conectem o app à sua barbearia.</p>
+                {!shop ? (
+                  <div className="h-48 w-full bg-surface-container rounded-xl animate-pulse" />
+                ) : (
+                  <>
+                    <div className="bg-white p-4 rounded-xl">
+                      <QRCodeCanvas id="razorfy-qr" value={connectUrl(shop.connectionCode)} size={200} level="M" includeMargin={false} />
+                    </div>
+                    <p className="text-[28px] font-bold tracking-[0.3em] text-on-surface">{shop.connectionCode}</p>
+                    <div className="flex gap-2 w-full">
+                      <button
+                        onClick={() => { navigator.clipboard?.writeText(shop.connectionCode); setSuccess('Código copiado.') }}
+                        className="flex-1 h-11 rounded-lg border border-on-surface/20 text-[12px] font-semibold uppercase tracking-wider text-on-surface-variant hover:bg-surface-container-high inline-flex items-center justify-center gap-2"
+                      >
+                        <Icon name="content_copy" className="text-[18px]" />Copiar
+                      </button>
+                      <button
+                        onClick={() => downloadQr('razorfy-qr', `qrcode-${shop.connectionCode}.png`)}
+                        className="flex-1 h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider inline-flex items-center justify-center gap-2"
+                      >
+                        <Icon name="download" className="text-[18px]" />Baixar QR
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </>
         )}
       </main>
     </div>
   )
+}
+
+// URL universal de conexão (deep-link web/QR). Cliente escaneia → app.barberflow.com/c/CODE.
+function connectUrl(code: string): string {
+  const base = (import.meta.env.VITE_CONNECT_BASE_URL as string | undefined) ?? window.location.origin
+  return `${base.replace(/\/$/, '')}/c/${code}`
+}
+
+// Exporta canvas do QR como PNG.
+function downloadQr(canvasId: string, filename: string) {
+  const canvas = document.getElementById(canvasId) as HTMLCanvasElement | null
+  if (!canvas) return
+  const a = document.createElement('a')
+  a.href = canvas.toDataURL('image/png')
+  a.download = filename
+  a.click()
 }
 
 function AdminMetric({ icon, label, value, tone = 'normal' }: { icon: string; label: string; value: string; tone?: 'normal' | 'warn' }) {

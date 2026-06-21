@@ -9,7 +9,7 @@ const BusinessError_1 = require("../common/BusinessError");
 async function createReview(clientId, data) {
     const appt = await prisma_1.prisma.appointment.findUnique({
         where: { id: data.appointmentId },
-        select: { id: true, clientId: true, barberId: true, status: true },
+        select: { id: true, clientId: true, barberId: true, status: true, tenantId: true },
     });
     if (!appt)
         throw new BusinessError_1.BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
@@ -27,6 +27,7 @@ async function createReview(clientId, data) {
                 appointmentId: appt.id,
                 barberId: appt.barberId,
                 clientId: appt.clientId,
+                tenantId: appt.tenantId,
                 rating: data.rating,
                 comment: data.comment?.trim() || null,
             },
@@ -37,6 +38,7 @@ async function createReview(clientId, data) {
                     appointmentId: appt.id,
                     alertType: 'BAD_REVIEW',
                     status: 'PENDING',
+                    tenantId: appt.tenantId,
                 },
             });
         }

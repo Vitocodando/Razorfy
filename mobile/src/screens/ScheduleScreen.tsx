@@ -15,6 +15,7 @@ import {
   PrimaryButton,
   Screen,
 } from '../components/ui';
+import { useAuth } from '../context/AuthContext';
 import { nextDays, toDateKey } from '../format';
 import { api } from '../services/api';
 import { colors, fonts } from '../theme';
@@ -27,6 +28,8 @@ import type {
 type Props = NativeStackScreenProps<RootStackParamList, 'Schedule'>;
 
 export function ScheduleScreen({ navigation, route }: Props) {
+  const { session } = useAuth();
+  const tenantId = session?.user.tenantId;
   const dates = useMemo(() => nextDays(), []);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [barbers, setBarbers] = useState<Barber[]>([]);
@@ -44,7 +47,7 @@ export function ScheduleScreen({ navigation, route }: Props) {
     .reduce((total, service) => total + service.durationMinutes, 0);
 
   useEffect(() => {
-    Promise.all([api.services(), api.barbers()])
+    Promise.all([api.services(tenantId), api.barbers(tenantId)])
       .then(([serviceData, barberData]) => {
         setServices(serviceData);
         setBarbers(barberData);
@@ -77,7 +80,7 @@ export function ScheduleScreen({ navigation, route }: Props) {
     setError('');
 
     api
-      .availability(barberId, date, duration)
+      .availability(barberId, date, duration, tenantId)
       .then((data) => {
         if (active) setTimes(data.availableStarts);
       })

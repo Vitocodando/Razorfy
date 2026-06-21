@@ -3,11 +3,18 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runWinBack = runWinBack;
 exports.startWinBackJob = startWinBackJob;
 const config_1 = require("../config");
+const prisma_1 = require("../prisma");
 const availability_service_1 = require("../schedule/availability.service");
 const admin_service_1 = require("../admin/admin.service");
 let lastRunDate = null;
+// Roda a campanha para cada barbearia ativa (multi-tenant).
 async function runWinBack(referenceDate = (0, availability_service_1.localDateString)()) {
-    return (0, admin_service_1.runWinBackCampaign)(referenceDate);
+    const tenants = await prisma_1.prisma.barbershop.findMany({ where: { isActive: true }, select: { id: true } });
+    const results = [];
+    for (const t of tenants) {
+        results.push(await (0, admin_service_1.runWinBackCampaign)(t.id, referenceDate));
+    }
+    return { tenants: tenants.length, results };
 }
 function startWinBackJob() {
     return setInterval(async () => {

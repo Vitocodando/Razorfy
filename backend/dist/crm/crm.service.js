@@ -7,17 +7,18 @@ exports.deleteNote = deleteNote;
 const prisma_1 = require("../prisma");
 const BusinessError_1 = require("../common/BusinessError");
 async function assertClient(clientId) {
-    const client = await prisma_1.prisma.user.findUnique({ where: { id: clientId }, select: { role: true } });
+    const client = await prisma_1.prisma.user.findUnique({ where: { id: clientId }, select: { role: true, tenantId: true } });
     if (!client || client.role !== 'CLIENT') {
         throw new BusinessError_1.BusinessError('CLIENT_NOT_FOUND', 'Cliente não encontrado.', 404);
     }
+    return client.tenantId; // CLIENT sempre tem tenant (CHECK no banco)
 }
 async function createNote(authorId, clientId, noteText) {
-    await assertClient(clientId);
+    const tenantId = await assertClient(clientId);
     const text = noteText.trim();
     if (!text)
         throw new BusinessError_1.BusinessError('EMPTY_NOTE', 'A anotação não pode ser vazia.', 422);
-    return prisma_1.prisma.clientNote.create({ data: { clientId, authorId, noteText: text } });
+    return prisma_1.prisma.clientNote.create({ data: { clientId, authorId, tenantId, noteText: text } });
 }
 // RN05: qualquer barbeiro/staff lê o histórico de notas do cliente; cada nota identifica o autor.
 async function listNotes(clientId) {

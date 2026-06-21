@@ -24,6 +24,7 @@ import {
   deleteBarber,
   deleteService,
   getGlobalSettings,
+  getMyBarbershop,
   updateGlobalSettings,
   deleteCommission,
   deleteCoupon,
@@ -52,153 +53,162 @@ adminRouter.use(authenticate, requireStrictAdmin);
 
 const UuidParam = z.string().uuid();
 
+// Tenant do admin autenticado (isolamento de todas as operações — Fase 2).
+// Rotas admin sempre têm tenant (role ADMIN nunca é DEV); asserção segura.
+const T = (req: import('express').Request) => req.user!.tenantId!;
+
 adminRouter.get('/dashboard', asyncHandler(async (req, res) => {
   const { date } = DateQuerySchema.parse(req.query);
-  res.json(await getDashboard(date));
+  res.json(await getDashboard(T(req), date));
 }));
 
 adminRouter.post('/reports/daily/rebuild', asyncHandler(async (req, res) => {
   const { date } = DateQuerySchema.parse(req.body ?? {});
-  res.json(await refreshDailyReport(date));
+  res.json(await refreshDailyReport(T(req), date));
 }));
 
 adminRouter.get('/appointments/grid', asyncHandler(async (req, res) => {
   const { date } = DateQuerySchema.parse(req.query);
-  res.json(await getGlobalGrid(date));
+  res.json(await getGlobalGrid(T(req), date));
 }));
 
 adminRouter.post('/appointments/:appointmentId/no-show', asyncHandler(async (req, res) => {
   const appointmentId = UuidParam.parse(req.params.appointmentId);
   const body = NoShowSchema.parse(req.body ?? {});
-  res.json(await applyNoShow(req.user!.id, appointmentId, body.reason));
+  res.json(await applyNoShow(req.user!.id, T(req), appointmentId, body.reason));
 }));
 
-adminRouter.get('/coupons', asyncHandler(async (_req, res) => {
-  res.json(await listCoupons());
+adminRouter.get('/coupons', asyncHandler(async (req, res) => {
+  res.json(await listCoupons(T(req)));
 }));
 
 adminRouter.post('/coupons', asyncHandler(async (req, res) => {
   const body = CouponSchema.parse(req.body);
-  res.status(201).json(await createCoupon(body));
+  res.status(201).json(await createCoupon(T(req), body));
 }));
 
 adminRouter.put('/coupons/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
   const body = CouponSchema.parse(req.body);
-  res.json(await updateCoupon(id, body));
+  res.json(await updateCoupon(T(req), id, body));
 }));
 
 adminRouter.delete('/coupons/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  await deleteCoupon(id);
+  await deleteCoupon(T(req), id);
   res.status(204).end();
 }));
 
-adminRouter.get('/commissions', asyncHandler(async (_req, res) => {
-  res.json(await listCommissions());
+adminRouter.get('/commissions', asyncHandler(async (req, res) => {
+  res.json(await listCommissions(T(req)));
 }));
 
 adminRouter.put('/commissions', asyncHandler(async (req, res) => {
   const body = CommissionSchema.parse(req.body);
-  res.json(await upsertCommission(req.user!.id, body));
+  res.json(await upsertCommission(req.user!.id, T(req), body));
 }));
 
 adminRouter.post('/commissions', asyncHandler(async (req, res) => {
   const body = CommissionSchema.parse(req.body);
-  res.status(201).json(await upsertCommission(req.user!.id, body));
+  res.status(201).json(await upsertCommission(req.user!.id, T(req), body));
 }));
 
 adminRouter.delete('/commissions/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  await deleteCommission(req.user!.id, id);
+  await deleteCommission(req.user!.id, T(req), id);
   res.status(204).end();
 }));
 
 adminRouter.get('/commissions/settlement', asyncHandler(async (req, res) => {
   const { from, to } = RangeQuerySchema.parse(req.query);
-  res.json(await getCommissionSettlement(from, to));
+  res.json(await getCommissionSettlement(T(req), from, to));
 }));
 
-adminRouter.get('/vacation-blocks', asyncHandler(async (_req, res) => {
-  res.json(await listVacationBlocks());
+adminRouter.get('/vacation-blocks', asyncHandler(async (req, res) => {
+  res.json(await listVacationBlocks(T(req)));
 }));
 
 adminRouter.post('/vacation-blocks', asyncHandler(async (req, res) => {
   const body = VacationBlockSchema.parse(req.body);
-  res.status(201).json(await createVacationBlock(req.user!.id, body));
+  res.status(201).json(await createVacationBlock(req.user!.id, T(req), body));
 }));
 
 adminRouter.delete('/vacation-blocks/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  await deleteVacationBlock(req.user!.id, id);
+  await deleteVacationBlock(req.user!.id, T(req), id);
   res.status(204).end();
 }));
 
 // Gestão de barbeiros (RF06/RF08 + criação/deleção)
-adminRouter.get('/barbers', asyncHandler(async (_req, res) => {
-  res.json(await listBarbersAdmin());
+adminRouter.get('/barbers', asyncHandler(async (req, res) => {
+  res.json(await listBarbersAdmin(T(req)));
 }));
 
 adminRouter.post('/barbers', asyncHandler(async (req, res) => {
   const body = CreateBarberSchema.parse(req.body);
-  res.status(201).json(await createBarber(req.user!.id, body));
+  res.status(201).json(await createBarber(req.user!.id, T(req), body));
 }));
 
 adminRouter.patch('/barbers/:id/status', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
   const { isActive } = StatusSchema.parse(req.body);
-  res.json(await setBarberStatus(req.user!.id, id, isActive));
+  res.json(await setBarberStatus(req.user!.id, T(req), id, isActive));
 }));
 
 adminRouter.delete('/barbers/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  await deleteBarber(req.user!.id, id);
+  await deleteBarber(req.user!.id, T(req), id);
   res.status(204).end();
 }));
 
 // Gestão de catálogo (RF07/RF08 + criação/deleção)
-adminRouter.get('/services', asyncHandler(async (_req, res) => {
-  res.json(await listServicesAdmin());
+adminRouter.get('/services', asyncHandler(async (req, res) => {
+  res.json(await listServicesAdmin(T(req)));
 }));
 
 adminRouter.post('/services', asyncHandler(async (req, res) => {
   const body = CreateServiceSchema.parse(req.body);
-  res.status(201).json(await createService(req.user!.id, body));
+  res.status(201).json(await createService(req.user!.id, T(req), body));
 }));
 
 adminRouter.patch('/services/:id/status', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
   const { isActive } = StatusSchema.parse(req.body);
-  res.json(await setServiceStatus(req.user!.id, id, isActive));
+  res.json(await setServiceStatus(req.user!.id, T(req), id, isActive));
 }));
 
 adminRouter.delete('/services/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  await deleteService(req.user!.id, id);
+  await deleteService(req.user!.id, T(req), id);
   res.status(204).end();
 }));
 
+// Barbearia do admin (código de conexão / QR)
+adminRouter.get('/barbershop', asyncHandler(async (req, res) => {
+  res.json(await getMyBarbershop(T(req)));
+}));
+
 // Configurações globais (RF04) — cache invalidado no PUT
-adminRouter.get('/global-settings', asyncHandler(async (_req, res) => {
-  res.json(await getGlobalSettings());
+adminRouter.get('/global-settings', asyncHandler(async (req, res) => {
+  res.json(await getGlobalSettings(T(req)));
 }));
 
 adminRouter.put('/global-settings', asyncHandler(async (req, res) => {
   const body = GlobalSettingsSchema.parse(req.body);
-  res.json(await updateGlobalSettings(req.user!.id, body));
+  res.json(await updateGlobalSettings(req.user!.id, T(req), body));
 }));
 
 adminRouter.get('/alerts', asyncHandler(async (req, res) => {
   const status = z.enum(['PENDING', 'RESOLVED']).optional().parse(req.query.status);
-  res.json(await listAdminAlerts(status));
+  res.json(await listAdminAlerts(T(req), status));
 }));
 
 adminRouter.patch('/alerts/:id/resolve', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
-  res.json(await resolveAdminAlert(req.user!.id, id));
+  res.json(await resolveAdminAlert(req.user!.id, T(req), id));
 }));
 
 adminRouter.post('/campaigns/win-back/run', asyncHandler(async (req, res) => {
   const { date } = DateQuerySchema.parse(req.body ?? {});
-  res.json(await runWinBackCampaign(date));
+  res.json(await runWinBackCampaign(T(req), date));
 }));

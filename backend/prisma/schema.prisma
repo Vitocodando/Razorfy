@@ -10,15 +10,17 @@ datasource db {
 model User {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name      String   @db.VarChar(100)
-  email     String   @unique @db.VarChar(150)
-  phone     String?  @unique @db.VarChar(20)
+  email     String   @db.VarChar(150)
+  phone     String?  @db.VarChar(20)
   password  String?  @db.VarChar(255)
-  googleId  String?  @unique @map("google_id") @db.VarChar(255)
+  googleId  String?  @map("google_id") @db.VarChar(255)
   role      String   @db.VarChar(20)
   isActive  Boolean  @default(true) @map("is_active")
   notificationPushEnabled     Boolean @default(true) @map("notification_push_enabled")
   notificationWhatsappEnabled Boolean @default(true) @map("notification_whatsapp_enabled")
   isAnonymized                Boolean @default(false) @map("is_anonymized")
+  is2faEnabled                Boolean @default(false) @map("is_2fa_enabled")
+  totpSecret                  String? @map("totp_secret") @db.VarChar(255)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   barberSlots                  BarberSlot[]
@@ -35,16 +37,35 @@ model User {
   clientNotes                  ClientNote[]               @relation("ClientNotes")
   authoredNotes                ClientNote[]               @relation("AuthoredNotes")
 
+  // Nulo somente para role DEV (plataforma); obrigatório para demais (CHECK no banco).
+  tenantId String? @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
+  @@unique([tenantId, email])
+  @@unique([tenantId, phone])
+  @@unique([tenantId, googleId])
   @@map("users")
 }
 
 model GlobalSettings {
-  id                     Int      @id @default(1)
   noShowToleranceMinutes Int      @default(15) @map("no_show_tolerance_minutes")
   defaultCashbackPct     Decimal  @default(10) @map("default_cashback_pct") @db.Decimal(5, 2)
   updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
+  tenantId String @id @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
   @@map("global_settings")
+}
+
+model Barbershop {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String   @db.VarChar(100)
+  slug           String   @unique @db.VarChar(50)
+  connectionCode String   @unique @map("connection_code") @db.VarChar(10)
+  logoUrl        String?  @map("logo_url") @db.VarChar(500)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("barbershops")
 }
 
 model BarberSlot {
@@ -59,6 +80,7 @@ model BarberSlot {
   barber User @relation(fields: [barberId], references: [id])
 
   @@unique([barberId, dayOfWeek])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("barber_slots")
 }
 
@@ -72,6 +94,7 @@ model Service {
   appointmentServices AppointmentService[]
   barberCommissions   BarberCommission[]
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("services")
 }
 
@@ -107,6 +130,7 @@ model Appointment {
   review               Review?
   adminAlerts          AdminAlert[]
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("appointments")
 }
 
@@ -121,6 +145,7 @@ model AppointmentService {
   service     Service     @relation(fields: [serviceId], references: [id])
 
   @@id([appointmentId, serviceId])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("appointment_services")
 }
 
@@ -134,6 +159,7 @@ model CashbackWallet {
   client       User                  @relation(fields: [clientId], references: [id])
   transactions CashbackTransaction[]
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("cashback_wallets")
 }
 
@@ -150,12 +176,13 @@ model CashbackTransaction {
   wallet      CashbackWallet @relation(fields: [walletId], references: [id])
   appointment Appointment?   @relation(fields: [appointmentId], references: [id])
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("cashback_transactions")
 }
 
 model Coupon {
   id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code            String   @unique @db.VarChar(20)
+  code            String   @db.VarChar(20)
   discountType    String   @map("discount_type") @db.VarChar(15)
   discountValue   Decimal  @map("discount_value") @db.Decimal(10, 2)
   maxUsesGlobal   Int?     @map("max_uses_global")
@@ -166,6 +193,9 @@ model Coupon {
 
   appointments Appointment[]
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
+  @@unique([tenantId, code])
   @@map("coupons")
 }
 
@@ -182,6 +212,7 @@ model BarberCommission {
 
   @@unique([barberId, serviceId])
   @@index([barberId])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("barber_commissions")
 }
 
@@ -195,6 +226,7 @@ model VacationBlock {
   barber User @relation(fields: [barberId], references: [id])
 
   @@index([barberId, startDate, endDate])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("vacation_blocks")
 }
 
@@ -210,12 +242,13 @@ model AdminAlert {
   appointment Appointment @relation(fields: [appointmentId], references: [id])
 
   @@index([status, createdAt])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("admin_alerts")
 }
 
 model DailyAdminReport {
   id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  reportDate           DateTime @unique @map("report_date") @db.Date
+  reportDate           DateTime @map("report_date") @db.Date
   grossRevenue         Decimal  @default(0) @map("gross_revenue") @db.Decimal(10, 2)
   netRevenue           Decimal  @default(0) @map("net_revenue") @db.Decimal(10, 2)
   concludedAppointments Int     @default(0) @map("concluded_appointments")
@@ -228,6 +261,9 @@ model DailyAdminReport {
   createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
+  @@unique([tenantId, reportDate])
   @@map("daily_admin_reports")
 }
 
@@ -243,6 +279,7 @@ model AppointmentStatusHistory {
   appointment Appointment @relation(fields: [appointmentId], references: [id])
   actor       User?       @relation(fields: [changedBy], references: [id])
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("appointment_status_history")
 }
 
@@ -262,6 +299,7 @@ model NotificationOutbox {
 
   appointment Appointment? @relation(fields: [appointmentId], references: [id])
 
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("notification_outbox")
 }
 
@@ -278,6 +316,7 @@ model ScheduleBlock {
   barber User @relation(fields: [barberId], references: [id])
 
   @@index([barberId, startTimestamp])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("schedule_blocks")
 }
 
@@ -295,6 +334,7 @@ model Review {
   client      User        @relation("ClientReviews", fields: [clientId], references: [id])
 
   @@index([barberId])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("reviews")
 }
 
@@ -309,6 +349,7 @@ model BarberGoal {
   barber User @relation(fields: [barberId], references: [id])
 
   @@index([barberId])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("barber_goals")
 }
 
@@ -324,5 +365,6 @@ model ClientNote {
   author User @relation("AuthoredNotes", fields: [authorId], references: [id])
 
   @@index([clientId])
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("client_notes")
 }

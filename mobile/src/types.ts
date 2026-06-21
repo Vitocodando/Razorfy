@@ -6,6 +6,7 @@ export type User = {
   email: string;
   phone: string;
   role: string;
+  tenantId?: string;
 };
 
 export type Session = {
@@ -14,6 +15,10 @@ export type Session = {
   expiresAt: string;
   user: User;
 };
+
+export type Require2fa = { status: 'REQUIRE_2FA'; preAuthToken: string; message: string };
+export type LoginResponse = Session | Require2fa;
+export type TwoFaSetup = { otpAuthUri: string; manualSecretKey: string };
 
 export type ServiceItem = {
   id: string;
@@ -25,6 +30,22 @@ export type ServiceItem = {
 export type Barber = {
   id: string;
   name: string;
+};
+
+export type Barbershop = {
+  id: string;
+  name: string;
+  slug: string;
+  connectionCode?: string;
+  logoUrl?: string | null;
+};
+
+export type ConnectResult = {
+  tenantId: string;
+  name: string;
+  slug: string;
+  connectionCode: string;
+  logoUrl: string | null;
 };
 
 export type WalletTransaction = {
@@ -70,6 +91,7 @@ export type TabParamList = {
 };
 
 export type RootStackParamList = {
+  Discovery: undefined;
   Auth: undefined;
   MainTabs: NavigatorScreenParams<TabParamList> | undefined;
   Services: undefined;

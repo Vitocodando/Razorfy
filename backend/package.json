@@ -21,6 +21,7 @@
     "express": "^4.21.2",
     "google-auth-library": "^10.7.0",
     "jsonwebtoken": "^9.0.2",
+    "otplib": "^13.4.1",
     "uuid": "^11.1.0",
     "zod": "^3.25.57"
   },

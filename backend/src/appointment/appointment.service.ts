@@ -51,7 +51,7 @@ export async function createAppointment(clientId: string, body: {
   cashbackAmountToApply?: number | null;
   couponCode?: string | null;
   paymentMethod: string;
-}) {
+}, tenantId: string) {
   if (new Set(body.serviceIds).size !== body.serviceIds.length) {
     throw new BusinessError('DUPLICATE_SERVICES', 'Um serviço não pode ser selecionado mais de uma vez.', 400);
   }
@@ -73,11 +73,15 @@ export async function createAppointment(clientId: string, body: {
     }
 
     // Lock barber row
-    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string; name: string; is_active: boolean }>>`
-      SELECT id, role, name, is_active FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
+    const barberRows = await (tx as typeof prisma).$queryRaw<Array<{ id: string; role: string; name: string; is_active: boolean; tenant_id: string }>>`
+      SELECT id, role, name, is_active, tenant_id FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
     `;
     if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
       throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+    }
+    // V01/guarda anti-vazamento: barbeiro precisa pertencer ao tenant do cliente.
+    if (barberRows[0].tenant_id !== tenantId) {
+      throw new BusinessError('TENANT_MISMATCH', 'Operação não autorizada. O barbeiro ou serviço selecionado não pertence à barbearia atual do cliente.', 403);
     }
     if (!barberRows[0].is_active) {
       throw new BusinessError('BARBER_INACTIVE', 'Este profissional não está disponível para novos agendamentos.', 422);
@@ -89,6 +93,10 @@ export async function createAppointment(clientId: string, body: {
     });
     if (selectedServices.length !== body.serviceIds.length) {
       throw new BusinessError('SERVICE_NOT_FOUND', 'Um ou mais serviços não estão disponíveis.', 422);
+    }
+    // V01/guarda: todos os serviços precisam pertencer ao tenant do cliente.
+    if (selectedServices.some(s => s.tenantId !== tenantId)) {
+      throw new BusinessError('TENANT_MISMATCH', 'Operação não autorizada. O barbeiro ou serviço selecionado não pertence à barbearia atual do cliente.', 403);
     }
 
     const total = selectedServices.reduce(
@@ -138,7 +146,7 @@ export async function createAppointment(clientId: string, body: {
       throw new BusinessError('SLOT_BLOCKED', 'O profissional está em férias no dia selecionado.', 409);
     }
 
-    const coupon = couponCode ? await lockAndApplyCoupon(tx, couponCode, total) : null;
+    const coupon = couponCode ? await lockAndApplyCoupon(tx, couponCode, total, tenantId) : null;
 
     const online = body.paymentMethod !== 'PRESENTIAL';
     const initialStatus = online ? 'PENDING_PAYMENT' : 'CONFIRMED';
@@ -151,6 +159,7 @@ export async function createAppointment(clientId: string, body: {
       data: {
         clientId,
         barberId: barber.id,
+        tenantId,
         startTimestamp: start,
         endTimestamp: end,
         totalPrice: total,
@@ -309,7 +318,7 @@ export async function concludeAppointment(appointmentId: string, actorId: string
 
     const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
     // Taxa de cashback parametrizável (global_settings); incide sobre o valor pago em dinheiro.
-    const cashbackRate = await settingsSvc.getCashbackRate();
+    const cashbackRate = await settingsSvc.getCashbackRate(appt.tenantId);
     const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, cashbackRate);
 
     const updated = await tx.appointment.update({
@@ -409,7 +418,7 @@ function normalizeCouponCode(code: string | null | undefined): string | null {
   return normalized;
 }
 
-async function lockAndApplyCoupon(tx: TxClient, code: string, total: Prisma.Decimal) {
+async function lockAndApplyCoupon(tx: TxClient, code: string, total: Prisma.Decimal, tenantId: string) {
   const rows = await (tx as typeof prisma).$queryRaw<Array<{
     id: string;
     code: string;
@@ -427,7 +436,7 @@ async function lockAndApplyCoupon(tx: TxClient, code: string, total: Prisma.Deci
            current_uses as "currentUses",
            expires_at as "expiresAt"
     FROM coupons
-    WHERE code = ${code}
+    WHERE code = ${code} AND tenant_id = ${tenantId}::uuid
     FOR UPDATE
   `;
   if (rows.length === 0) {

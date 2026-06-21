@@ -6,6 +6,7 @@ type Tx = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction'
 interface WalletRow {
   id: string;
   clientId: string;
+  tenantId: string;
   balance: Prisma.Decimal;
   reservedBalance: Prisma.Decimal;
   version: bigint;
@@ -13,18 +14,20 @@ interface WalletRow {
 
 export async function lockWallet(tx: Tx, clientId: string): Promise<WalletRow> {
   const rows = await (tx as PrismaClient).$queryRaw<WalletRow[]>`
-    SELECT id, client_id as "clientId", balance, reserved_balance as "reservedBalance", version
+    SELECT id, client_id as "clientId", tenant_id as "tenantId", balance, reserved_balance as "reservedBalance", version
     FROM cashback_wallets WHERE client_id = ${clientId}::uuid FOR UPDATE
   `;
   if (rows.length > 0) return rows[0];
 
-  // Create wallet if not exists
+  // Create wallet if not exists — tenant herdado do cliente (carteira isolada por barbearia).
+  const client = await tx.user.findUnique({ where: { id: clientId }, select: { tenantId: true } });
   const created = await tx.cashbackWallet.create({
-    data: { clientId },
+    data: { clientId, tenantId: client?.tenantId ?? undefined },
   });
   return {
     id: created.id,
     clientId: created.clientId,
+    tenantId: created.tenantId,
     balance: created.balance,
     reservedBalance: created.reservedBalance,
     version: created.version,
@@ -49,7 +52,7 @@ export async function reserve(
   const newReserved = wallet.reservedBalance.plus(amount);
   await updateWallet(tx, wallet, wallet.balance, newReserved);
   const balanceAfter = wallet.balance.minus(newReserved);
-  await insertTransaction(tx, wallet.id, appointmentId, 'RESERVE', amount, balanceAfter, 'Reserva para agendamento');
+  await insertTransaction(tx, wallet.id, wallet.tenantId, appointmentId, 'RESERVE', amount, balanceAfter, 'Reserva para agendamento');
   wallet.reservedBalance = newReserved;
 }
 
@@ -63,7 +66,7 @@ export async function debitReserved(
   const newBalance = wallet.balance.minus(amount);
   const newReserved = wallet.reservedBalance.minus(amount);
   await updateWallet(tx, wallet, newBalance, newReserved);
-  await insertTransaction(tx, wallet.id, appointmentId, 'DEBIT', amount, newBalance, 'Cashback utilizado no pagamento');
+  await insertTransaction(tx, wallet.id, wallet.tenantId, appointmentId, 'DEBIT', amount, newBalance, 'Cashback utilizado no pagamento');
   wallet.balance = newBalance;
   wallet.reservedBalance = newReserved;
 }
@@ -78,7 +81,7 @@ export async function release(
   const newReserved = wallet.reservedBalance.minus(amount);
   await updateWallet(tx, wallet, wallet.balance, newReserved);
   const balanceAfter = wallet.balance.minus(newReserved);
-  await insertTransaction(tx, wallet.id, appointmentId, 'RELEASE', amount, balanceAfter, 'Reserva liberada');
+  await insertTransaction(tx, wallet.id, wallet.tenantId, appointmentId, 'RELEASE', amount, balanceAfter, 'Reserva liberada');
   wallet.reservedBalance = newReserved;
 }
 
@@ -91,7 +94,7 @@ export async function refund(
   if (amount.equals(0)) return;
   const newBalance = wallet.balance.plus(amount);
   await updateWallet(tx, wallet, newBalance, wallet.reservedBalance);
-  await insertTransaction(tx, wallet.id, appointmentId, 'CREDIT', amount, newBalance, 'Cashback devolvido por cancelamento');
+  await insertTransaction(tx, wallet.id, wallet.tenantId, appointmentId, 'CREDIT', amount, newBalance, 'Cashback devolvido por cancelamento');
   wallet.balance = newBalance;
 }
 
@@ -107,7 +110,7 @@ export async function creditEarned(
   if (earned.equals(0)) return earned;
   const newBalance = wallet.balance.plus(earned);
   await updateWallet(tx, wallet, newBalance, wallet.reservedBalance);
-  await insertTransaction(tx, wallet.id, appointmentId, 'CREDIT', earned, newBalance, 'Cashback por serviço concluído');
+  await insertTransaction(tx, wallet.id, wallet.tenantId, appointmentId, 'CREDIT', earned, newBalance, 'Cashback por serviço concluído');
   wallet.balance = newBalance;
   return earned;
 }
@@ -127,6 +130,7 @@ export async function penalizeNoShow(
   const transaction = await insertTransaction(
     tx,
     wallet.id,
+    wallet.tenantId,
     appointmentId,
     'PENALTY_NO_SHOW',
     deductedAmount,
@@ -160,6 +164,7 @@ async function updateWallet(
 async function insertTransaction(
   tx: Tx,
   walletId: string,
+  tenantId: string,
   appointmentId: string,
   type: string,
   amount: Prisma.Decimal,
@@ -167,6 +172,6 @@ async function insertTransaction(
   description: string,
 ) {
   return tx.cashbackTransaction.create({
-    data: { walletId, appointmentId, type, amount, balanceAfter, description },
+    data: { walletId, tenantId, appointmentId, type, amount, balanceAfter, description },
   });
 }

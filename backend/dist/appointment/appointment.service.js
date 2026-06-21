@@ -80,7 +80,7 @@ function apptData(appt) {
         status: appt.status,
     };
 }
-async function createAppointment(clientId, body) {
+async function createAppointment(clientId, body, tenantId) {
     if (new Set(body.serviceIds).size !== body.serviceIds.length) {
         throw new BusinessError_1.BusinessError('DUPLICATE_SERVICES', 'Um serviço não pode ser selecionado mais de uma vez.', 400);
     }
@@ -98,10 +98,14 @@ async function createAppointment(clientId, body) {
         }
         // Lock barber row
         const barberRows = await tx.$queryRaw `
-      SELECT id, role, name, is_active FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
+      SELECT id, role, name, is_active, tenant_id FROM users WHERE id = ${body.barberId}::uuid FOR UPDATE
     `;
         if (barberRows.length === 0 || barberRows[0].role !== 'BARBER') {
             throw new BusinessError_1.BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
+        }
+        // V01/guarda anti-vazamento: barbeiro precisa pertencer ao tenant do cliente.
+        if (barberRows[0].tenant_id !== tenantId) {
+            throw new BusinessError_1.BusinessError('TENANT_MISMATCH', 'Operação não autorizada. O barbeiro ou serviço selecionado não pertence à barbearia atual do cliente.', 403);
         }
         if (!barberRows[0].is_active) {
             throw new BusinessError_1.BusinessError('BARBER_INACTIVE', 'Este profissional não está disponível para novos agendamentos.', 422);
@@ -112,6 +116,10 @@ async function createAppointment(clientId, body) {
         });
         if (selectedServices.length !== body.serviceIds.length) {
             throw new BusinessError_1.BusinessError('SERVICE_NOT_FOUND', 'Um ou mais serviços não estão disponíveis.', 422);
+        }
+        // V01/guarda: todos os serviços precisam pertencer ao tenant do cliente.
+        if (selectedServices.some(s => s.tenantId !== tenantId)) {
+            throw new BusinessError_1.BusinessError('TENANT_MISMATCH', 'Operação não autorizada. O barbeiro ou serviço selecionado não pertence à barbearia atual do cliente.', 403);
         }
         const total = selectedServices.reduce((acc, s) => acc.plus(s.price), new client_1.Prisma.Decimal(0)).toDecimalPlaces(2);
         const requestedCashback = normalizeCashback(body.useCashback, body.cashbackAmountToApply, selectedServices.map(s => s.price));
@@ -149,7 +157,7 @@ async function createAppointment(clientId, body) {
         if (vacation) {
             throw new BusinessError_1.BusinessError('SLOT_BLOCKED', 'O profissional está em férias no dia selecionado.', 409);
         }
-        const coupon = couponCode ? await lockAndApplyCoupon(tx, couponCode, total) : null;
+        const coupon = couponCode ? await lockAndApplyCoupon(tx, couponCode, total, tenantId) : null;
         const online = body.paymentMethod !== 'PRESENTIAL';
         const initialStatus = online ? 'PENDING_PAYMENT' : 'CONFIRMED';
         const holdExpiresAt = online
@@ -160,6 +168,7 @@ async function createAppointment(clientId, body) {
             data: {
                 clientId,
                 barberId: barber.id,
+                tenantId,
                 startTimestamp: start,
                 endTimestamp: end,
                 totalPrice: total,
@@ -303,7 +312,7 @@ async function concludeAppointment(appointmentId, actorId) {
         }
         const wallet = await cashbackSvc.lockWallet(tx, appt.clientId);
         // Taxa de cashback parametrizável (global_settings); incide sobre o valor pago em dinheiro.
-        const cashbackRate = await settingsSvc.getCashbackRate();
+        const cashbackRate = await settingsSvc.getCashbackRate(appt.tenantId);
         const earned = await cashbackSvc.creditEarned(tx, wallet, appt.id, appt.amountPaid, cashbackRate);
         const updated = await tx.appointment.update({
             where: { id: appt.id },
@@ -390,7 +399,7 @@ function normalizeCouponCode(code) {
     }
     return normalized;
 }
-async function lockAndApplyCoupon(tx, code, total) {
+async function lockAndApplyCoupon(tx, code, total, tenantId) {
     const rows = await tx.$queryRaw `
     SELECT id,
            code,
@@ -400,7 +409,7 @@ async function lockAndApplyCoupon(tx, code, total) {
            current_uses as "currentUses",
            expires_at as "expiresAt"
     FROM coupons
-    WHERE code = ${code}
+    WHERE code = ${code} AND tenant_id = ${tenantId}::uuid
     FOR UPDATE
   `;
     if (rows.length === 0) {

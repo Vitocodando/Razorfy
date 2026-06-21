@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-19T16:20:00
+last_updated: 2026-06-21T03:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -984,6 +984,83 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 
+### FEAT-073 - Arquitetura SaaS Multi-Tenant (Fase 1: fundação + rotas quentes)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `PLATFORM_OWNER`, `ADMIN`, `BARBER`, `CLIENT`
+- `description`: Evolução de single-tenant para multi-tenant SaaS. Entidade `barbershops` (Tenant) centraliza o negócio; `tenant_id` em todas as tabelas; isolamento de dados em TODO o backend; discovery (seleção de barbearia) no app/web. **Fase 1:** fundação + rotas quentes. **Fase 2:** isolamento de query de todo o backend + `global_settings` por tenant + discovery no frontend (web + mobile). Mantém o sistema funcionando via um **tenant default** ("Razorfy", `aaaaaaaa-0000-0000-0000-000000000001`) para o qual todos os dados existentes foram migrados; novos clientes escolhem a barbearia no discovery.
+- `business_rules`: **RN01/V01** — `createAppointment` valida que barbeiro e serviços pertencem ao tenant do cliente (do JWT), senão `TENANT_MISMATCH 403`. **RN04** — rotas públicas trazem o tenant no path (`/api/v1/tenants/:tenantId/...`, UUID ou slug); rotas autenticadas extraem o tenant do claim `tnt` do JWT (anti-IDOR). **V02** — unicidade composta por tenant (`users(tenant_id,email|phone|google_id)`, `coupons(tenant_id,code)`). **RF03/CT02** — login bloqueado se a barbearia estiver inativa (`TENANT_SUSPENDED 403`). **RN03** — cashback/saldo isolado por cliente (cliente pertence a um tenant). Tenant inexistente → `TENANT_NOT_FOUND 404`.
+- `api`: `GET /api/v1/barbershops?q=` e `GET /api/v1/barbershops/:slug` (discovery público); `GET /api/v1/tenants/:tenantId/{services,barbers,barbers/:id/availability}` (públicas, via `resolveTenant`); rotas legadas (`/services`, `/barbers`, `/appointments`) resolvem o tenant default; JWT ganha claim `tnt`; `/auth/register|login` aceitam `tenantSlug`.
+- `frontend`: web (`TenantDiscovery` + tenant no `AuthScreen` + catálogo/availability tenant-scoped via `session.user.tenantId`) e mobile (`TenantDiscoveryScreen` + tenant no `AuthContext`/`AuthScreen` + `api.services/barbers/availability(tenantId)`). Tenant selecionado persistido (`razorfy.tenant`); botão "trocar barbearia".
+- `database_changes`: `0008_multi_tenant` — tabela `barbershops` + seed default; coluna `tenant_id` (NOT NULL DEFAULT default-tenant, FK) em ~19 tabelas; uniques compostas; `global_settings` deixa de ser singleton.
+- `scope_phase_1`: catálogo, disponibilidade, agendamento, cashback isolados; auth com tenant; admin `createService`/`createBarber`/`setServiceStatus` escopados por tenant.
+- `phase_2_entregue (backend)`: **isolamento de query de TODO o backend por tenant** — admin (dashboard, grid, no-show, cupons CRUD, comissões + settlement, férias, alertas, win-back, daily report, list/delete barbeiro+serviço), review/goal/CRM/blocks/slots gravam `tenant_id` do parent, carteira+transações de cashback por tenant; `global_settings` agora é **1 registro por tenant** (`tenant_id` é PK, cache por tenant; no-show/cashback lêem o tenant do agendamento); win-back roda por barbearia ativa. Migrations `0009_tenant_daily_report` (unique `(tenant_id, report_date)`) e `0010_global_settings_pk`.
+- `phase_2_frontend (entregue)`: discovery de barbearia (web `TenantDiscovery`, mobile `TenantDiscoveryScreen`) consumindo `GET /barbershops`; tenant persistido e injetado no login/registro (`tenantSlug`) e nas chamadas de catálogo/disponibilidade (`/tenants/:id/...`). Cliente verificado: registro com `tenantSlug=tenant-b` → `user.tenantId = B`; catálogo do app passa a vir da barbearia escolhida.
+- `deep_link (entregue)`: web `/app/:slug` (resolve via `GET /barbershops/:slug` e pré-fixa o tenant, limpando a URL) e mobile `razorfy://app/:slug` (RN `Linking` no `RootNavigator`, initial URL + evento). Slug inválido/inativo cai no discovery. Permite link/QR (ex.: Instagram) fixar a barbearia.
+- `api_compatibility`: `COMPATIBLE` (contratos do app inalterados; `accessToken`/`user` ganham `tenantId`, aditivo).
+- `depends_on`: `FEAT-002`, `FEAT-010`, `FEAT-069`, `FEAT-072`
+- `acceptance`: dados existentes migrados para o tenant default; `/tenants/B/services` isola; CT01 OK; `TENANT_MISMATCH`/`TENANT_NOT_FOUND`/`TENANT_SUSPENDED` corretos; **Fase 2** — admin de cada barbearia só vê seus cupons/barbeiros/serviços/relatórios; `global_settings` de B (25/5) não afeta o default (20/7,5); dashboard/settlement de B não vazam dados do default.
+- `tests`: builds backend ✓; smoke HTTP com 2 tenants (default + Tenant B com admin/barbeiro/serviço/cupom próprios) — isolamento de catálogo, CT01, `404`/`403`, regressão de agendamento; **Fase 2** isolamento de coupons/barbers/services/dashboard/settlement por admin e `global_settings` por tenant verificados.
+- `risk`: `HIGH`
+- `target_release`: `UNRELEASED`
+
+### FEAT-074 - Conexão de Tenant por Código / QR Code (white-label discovery)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `ADMIN`, `CLIENT`
+- `description`: Substitui o discovery por busca aberta (lista global de barbearias) por **conexão por código + QR Code** (ilusão white-label). Cada barbearia tem um `connection_code` único, alfanumérico MAIÚSCULO; o cliente conecta o app genérico a uma barbearia digitando o código ou escaneando o QR. **Não inclui** listagem global, busca por nome/cidade/GPS. Uma vez conectado, o app não reexibe a tela de conexão até o cliente "Desconectar barbearia".
+- `business_rules`: **RN01** — `connection_code` gerado na criação da barbearia, `VARCHAR(10)`, UNIQUE, regex `^[A-Z0-9]+$`. **RN02/V01** — case-insensitive: `trim()` + `toUpperCase()` antes da validação/busca (front e back). **RN03/CT-inativa** — barbearia `is_active=false` → `TENANT_INACTIVE 403`. **RN04/CT02** — desconectar limpa o tenant persistido e a sessão; reabrir o app volta à tela "Conecte-se". **NFR-segurança** — endpoint público de conexão **nunca** retorna dados sensíveis (faturamento, proprietário, PIX); só `id`, `name`, `logo_url` (+ `slug`/`connectionCode` para o fluxo de login escopado).
+- `api`: `GET /api/v1/tenants/connect/:code` (público; trim+uppercase; formato inválido → `BAD_REQUEST_FORMAT 400`; não encontrado → `INVALID_CONNECTION_CODE 404`; inativa → `TENANT_INACTIVE 403`; sucesso → `{ tenantId, name, slug, connectionCode, logoUrl }`). `GET /api/v1/admin/barbershop` (autenticado; barbearia do admin: `{ id, name, slug, connectionCode, logoUrl }`).
+- `frontend`: web — `TenantDiscovery` reescrito (input com máscara MAIÚSCULA + leitor de QR via `BarcodeDetector` nativo com fallback gracioso para digitação); "Desconectar barbearia" em `SettingsPage` (cliente); painel admin nova aba **Conexão** mostra o código + QR (`qrcode.react`) com "Copiar" e "Baixar QR" (PNG do canvas). Mobile — `TenantDiscoveryScreen` reescrito (código + scanner `expo-camera`, fallback digitação); "Desconectar barbearia" em `ProfileScreen`; `api.connect(code)`.
+- `deep_link`: web `/c/:code` (universal, `connectUrl` aponta o QR para `app.barberflow.com/c/CODE` via `VITE_CONNECT_BASE_URL` ou origin) e mobile `razorfy://connect/:code` / `.../c/:code` (RN `Linking`). Rotas legadas `/app/:slug` e `razorfy://app/:slug` mantidas.
+- `database_changes`: `0011_connection_code` — `barbershops.connection_code VARCHAR(10) NOT NULL UNIQUE CHECK (~ '^[A-Z0-9]+$')` + `logo_url VARCHAR(500)`; backfill do code a partir do slug (`razorfy`→`RAZORFY`, `tenant-b`→`TENANTB`).
+- `api_compatibility`: `COMPATIBLE` (rota de busca `/barbershops` permanece; novas rotas aditivas).
+- `depends_on`: `FEAT-073`
+- `acceptance`: CT01 `"  razorfy  "` → trim/upper → conecta (200); código inexistente → `404 INVALID_CONNECTION_CODE`; formato inválido (`AB@C`) → `400 BAD_REQUEST_FORMAT`; barbearia inativa → `403 TENANT_INACTIVE`; admin obtém o próprio código; desconectar → reabrir mostra "Conecte-se".
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓, mobile `tsc` ✓; smoke HTTP — CT01 (lowercase+spaces) 200, 404, 400, Tenant B 200, toggle `is_active=false` → 403 e revertido 200, `GET /admin/barbershop` retorna `RAZORFY`.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-075 - Módulo do Desenvolvedor (Backoffice Mestre da Plataforma)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `DEV` (Platform Owner), `ADMIN` (criado como resultado)
+- `description`: Painel de controle global exclusivo do proprietário do SaaS (`role = 'DEV'`). Gerencia o ciclo de vida das barbearias assinantes (Tenants): onboarding transacional (cria barbearia + usuário-mestre ADMIN no mesmo request), kill-switch (inativação lógica que bloqueia todos os usuários da barbearia instantaneamente) e listagem global paginada. **Não inclui** faturamento/assinaturas nem o DEV operar como cliente (LGPD). Substitui scripts manuais no banco para criar/bloquear clientes.
+- `business_rules`: **RN01** — todo usuário `DEV` tem `tenant_id` NULO (não pertence a barbearia); CHECK no banco garante `role='DEV' ⟺ tenant_id IS NULL`. **RN02/RN13** — rotas `/api/v1/platform/*` exigem role `DEV` (lida do JWT, avaliada ANTES de tocar tenant); demais roles → `PLATFORM_ACCESS_DENIED 403`. **RN03** — criação atômica: se o usuário-mestre falhar, a barbearia sofre rollback. **RN04** — `connection_code` imutável (sem endpoint de UPDATE). **V01** — role do `adminUser` forçada para `ADMIN`. **V03** — `connection_code` único em TODA a tabela (ativo ou inativo) → `DUPLICATE_CONNECTION_CODE 422`.
+- `kill_switch`: `authenticate` checa `barbershop.is_active` por requisição (cache TTL 10s, invalidado no PATCH) → token de barbearia suspensa cai em `TENANT_SUSPENDED 403` na próxima request; rota pública de conexão (QR) já barra com `TENANT_INACTIVE 403`.
+- `api`: `GET /api/v1/platform/tenants?page&size` (paginado: `{ content[], totalPages, totalElements }`, com `adminContact`); `POST /api/v1/platform/tenants` (transacional `{ tenant{name,slug,connectionCode}, adminUser{name,email,phone,initialPassword} }` → 201); `PATCH /api/v1/platform/tenants/:id/status` `{ isActive }`. Todas sob `authenticate + requireDev`.
+- `frontend`: web — rota obscura `/platform` com `DevLoginScreen` (login sem discovery de tenant); `PlatformConsole` (lista paginada com status/código/contato do dono, criar barbearia+admin, bloquear/reativar com confirmação). DEV autenticado renderiza o console ignorando o gate de tenant.
+- `seed`: usuário DEV criado no boot via `devBootstrap` (env `DEV_PLATFORM_EMAIL`/`DEV_PLATFORM_PASSWORD`), `tenant_id` NULL. NFR: nunca há endpoint aberto para criar o primeiro DEV.
+- `database_changes`: `0012_dev_platform` — `users.tenant_id` passa a aceitar NULL; `CHECK ((role = 'DEV') = (tenant_id IS NULL))`.
+- `api_compatibility`: `COMPATIBLE` (rotas novas; JWT do DEV omite claim `tnt`).
+- `depends_on`: `FEAT-073`, `FEAT-074`
+- `acceptance`: DEV lista/cria/bloqueia; ADMIN em `/platform/*` → 403 `PLATFORM_ACCESS_DENIED`; onboarding cria 1 `barbershops` + 1 `users` ADMIN vinculado; código duplicado → 422; bloqueio derruba token existente na próxima request (`TENANT_SUSPENDED`).
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — DEV login (sem `tnt`), lista com `adminContact`, ADMIN→403, criar NAVALHA→201 + login do novo admin→200, dup code/slug→422, payload inválido→400 (sem criar tenant), kill-switch 200→PATCH false→403 `TENANT_SUSPENDED`→connect 403→reativa→200.
+- `risk`: `HIGH`
+- `target_release`: `UNRELEASED`
+
+### FEAT-076 - Segurança: Autenticação em Duas Etapas (2FA TOTP)
+
+- `status`: `IMPLEMENTED`
+- `area`: `SECURITY`
+- `actors`: `CLIENT`, `BARBER`, `ADMIN`, `DEV` (qualquer usuário)
+- `description`: 2FA via apps autenticadores (Google Authenticator/Authy/Microsoft) usando TOTP (RFC 6238). Ativação exige provar o 1º código; login de conta com 2FA é interceptado (token intermediário) e só libera o JWT após o código de 6 dígitos. Toggle em Configurações > Segurança. **Não inclui** 2FA por SMS/e-mail nem backup codes (futuro). Backend Node (projeto migrado de Java): lib `otplib` v13.
+- `business_rules`: **RN01** — tolerância de drift ±30s (janela 90s) via `epochTolerance`. **RN02** — `is_2fa_enabled` só vira `true` após validar o 1º código (nunca por clique). **RN03** — `totp_secret` jamais trafega em leitura (`GET /users/me` só expõe o flag). **RN04** — issuer da URI carrega o nome da barbearia: `Razorfy (<tenant>)`. **V01** — código `^\d{6}$`. **V02** — `preAuthToken` tem claim `type=PRE_AUTH`; rejeitado em rotas normais (`PRE_AUTH_NOT_ALLOWED 401`).
+- `security_nfr`: **Cripto em repouso** — `totp_secret` cifrado com AES-256-GCM (`iv|tag|ciphertext` base64); chave-mestra em `TOTP_ENC_KEY` (env, 32 bytes hex). **Rate limiting** — verify-2fa bloqueia o usuário após 5 falhas por 15 min (`TOO_MANY_ATTEMPTS 429`).
+- `api`: `POST /auth/login` → 202 `{ status:'REQUIRE_2FA', preAuthToken }` quando 2FA ligado (senão 200 sessão); `POST /auth/login/verify-2fa` (Bearer preAuthToken + `{code}`) → JWT final; `POST /users/me/2fa/setup` → `{ otpAuthUri, manualSecretKey }`; `POST /users/me/2fa/enable` `{code}`; `DELETE /users/me/2fa` `{currentPassword, code}`. `GET /users/me` ganha `is2faEnabled`.
+- `frontend`: web — `TwoFactorLoginScreen` (código no login, web + DEV backoffice) e card Segurança em `SettingsPage` (`TwoFactorSettings`: setup com QR via `qrcode.react` + chave manual + ativar; desativar com senha+código). mobile — interceptação no `AuthScreen` (tela de código) + `ProfileScreen` Segurança (`TwoFactorSection`: chave manual sem QR, ativar/desativar); `AuthContext.login` retorna `{require2fa, preAuthToken}` + `verify2fa`.
+- `database_changes`: `0013_2fa` — `users.is_2fa_enabled BOOLEAN NOT NULL DEFAULT false`, `users.totp_secret VARCHAR(255)` (cifrado, nulo quando off).
+- `flow`: setup grava segredo cifrado como **pendente** (is2faEnabled false); enable valida e consolida (flag true); disable limpa segredo + flag. DEV (tenant nulo) também suportado: issuer cai para `Razorfy`.
+- `api_compatibility`: `COMPATIBLE` (login mantém 200 para contas sem 2FA; 202 é aditivo). Clientes antigos sem tela de código não conseguem concluir login de contas com 2FA — esperado.
+- `depends_on`: `FEAT-072`, `FEAT-075`
+- `acceptance`: ativar exige 1º código (código errado → 401, flag permanece false); login de conta 2FA → 202 + preAuthToken; preAuthToken barrado em rota normal; verify-2fa correto → JWT; 5 erros → 429; desativar exige senha + código (sem código → 400).
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓, mobile `tsc` ✓; smoke HTTP (otplib gerando códigos) — setup (uri+secret, issuer `Razorfy (Razorfy)`), enable errado→401 e flag false sem vazar secret, enable ok→is2fa true, login→202, preAuth em `/me`→401 `PRE_AUTH_NOT_ALLOWED`, verify-2fa→JWT, disable sem código→400, disable ok→flag false, rate-limit 5→`429 TOO_MANY_ATTEMPTS`.
+- `risk`: `HIGH`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -1016,6 +1093,26 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-026` | Exclusão de cliente é anonimização LGPD (soft-delete + PII mascarado + carteira zerada); bloqueada com agendamento futuro | `FEAT-072` |
 | `RN-027` | Notificações respeitam consentimento (`notification_*_enabled`); canal desligado não dispara (inclui win-back) | `FEAT-072` |
 | `RN-028` | Parâmetros globais (no-show, cashback) são singleton com cache; mutação exclusiva do Admin com efeito imediato | `FEAT-072` |
+| `RN-029` | Toda operação filtra por `tenant_id`; nenhum dado vaza entre barbearias (Fase 1: rotas quentes) | `FEAT-073` |
+| `RN-030` | Unicidade é composta por tenant (e-mail/telefone/google por barbearia; nome de serviço por barbearia) | `FEAT-073` |
+| `RN-031` | Barbeiro/serviço de outra barbearia no agendamento → `TENANT_MISMATCH 403` | `FEAT-073` |
+| `RN-032` | Login/acesso bloqueado quando a barbearia está inativa (`TENANT_SUSPENDED`) | `FEAT-073` |
+| `RN-033` | Conexão por código: `connection_code` único, `VARCHAR(10)`, alfanumérico MAIÚSCULO (`^[A-Z0-9]+$`) | `FEAT-074` |
+| `RN-034` | Código case-insensitive: `trim()` + `toUpperCase()` antes de validar/buscar (front e back) | `FEAT-074` |
+| `RN-035` | Conectar a barbearia inativa → `TENANT_INACTIVE 403` | `FEAT-074` |
+| `RN-036` | Endpoint público de conexão nunca retorna dados sensíveis; só `id`, `name`, `logo_url` | `FEAT-074` |
+| `RN-037` | Após conectar, app não reexibe a tela de conexão até "Desconectar barbearia" | `FEAT-074` |
+| `RN-038` | Usuário `DEV` tem `tenant_id` NULO; CHECK garante `role='DEV' ⟺ tenant_id IS NULL` | `FEAT-075` |
+| `RN-039` | Rotas `/platform/*` exigem role `DEV` (do JWT, antes do tenant); outras → `PLATFORM_ACCESS_DENIED 403` | `FEAT-075` |
+| `RN-040` | Onboarding atômico: falha ao criar admin → rollback da barbearia | `FEAT-075` |
+| `RN-041` | `connection_code` imutável após criação (sem UPDATE); único em toda a tabela | `FEAT-075` |
+| `RN-042` | Kill-switch: barbearia inativa derruba tokens existentes na próxima request (`TENANT_SUSPENDED`) | `FEAT-075` |
+| `RN-043` | 2FA: ativação só após validar o 1º código TOTP (nunca por clique) | `FEAT-076` |
+| `RN-044` | 2FA: tolerância de drift ±30s (janela 90s) | `FEAT-076` |
+| `RN-045` | `totp_secret` cifrado (AES-256-GCM) e nunca exposto em leitura | `FEAT-076` |
+| `RN-046` | Login de conta com 2FA → 202 `REQUIRE_2FA` + `preAuthToken` (claim `PRE_AUTH`, barrado em rotas normais) | `FEAT-076` |
+| `RN-047` | verify-2fa: 5 falhas → bloqueio de 15 min (`TOO_MANY_ATTEMPTS`) | `FEAT-076` |
+| `RN-048` | Desativar 2FA exige senha atual E código TOTP válido | `FEAT-076` |
 
 ## 5. Registro de bugs
 

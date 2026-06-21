@@ -46,7 +46,7 @@ export function HomeScreen() {
 
     try {
       const [serviceData, walletData, appointmentData] = await Promise.all([
-        api.services(),
+        api.services(session.user.tenantId),
         api.wallet(session.accessToken),
         api.appointments(session.accessToken),
       ]);

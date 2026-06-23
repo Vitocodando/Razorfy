@@ -15,8 +15,8 @@ exports.authRouter.post('/register', (0, asyncHandler_1.asyncHandler)(async (req
     res.status(201).json(result);
 }));
 exports.authRouter.post('/login', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
-    const { email, password, tenantSlug } = auth_schemas_1.LoginSchema.parse(req.body);
-    const result = await (0, auth_service_1.login)(email, password, tenantSlug);
+    const { identifier, password, tenantSlug } = auth_schemas_1.LoginSchema.parse(req.body);
+    const result = await (0, auth_service_1.login)(identifier, password, tenantSlug);
     // FA01: 2FA exigido → 202 Accepted com preAuthToken; senão 200 com a sessão.
     if ('status' in result && result.status === 'REQUIRE_2FA') {
         res.status(202).json(result);

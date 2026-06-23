@@ -43,10 +43,11 @@ type AuthContextValue = {
   clearTenant: () => Promise<void>;
   login: (email: string, password: string) => Promise<{ require2fa: boolean; preAuthToken?: string }>;
   verify2fa: (preAuthToken: string, code: string) => Promise<void>;
+  otpSend: (phone: string) => Promise<void>;
+  otpVerify: (phone: string, code: string, name?: string) => Promise<void>;
   register: (
     name: string,
-    email: string,
-    phone: string,
+    identifier: string,
     password: string,
   ) => Promise<void>;
   logout: () => Promise<void>;
@@ -112,10 +113,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
     [persist],
   );
 
+  // FEAT-077: OTP por telefone (escopado ao tenant conectado).
+  const otpSend = useCallback(
+    async (phone: string) => {
+      if (!tenant) throw new Error('Conecte-se a uma barbearia primeiro.');
+      await api.otpSend(tenant.id, phone);
+    },
+    [tenant],
+  );
+
+  const otpVerify = useCallback(
+    async (phone: string, code: string, name?: string) => {
+      if (!tenant) throw new Error('Conecte-se a uma barbearia primeiro.');
+      await persist(await api.otpVerify(tenant.id, phone, code, name));
+    },
+    [persist, tenant],
+  );
+
   const register = useCallback(
-    async (name: string, email: string, phone: string, password: string) => {
+    async (name: string, identifier: string, password: string) => {
       await persist(
-        await api.register(name.trim(), email.trim(), phone.trim(), password, tenant?.slug),
+        await api.register(name.trim(), identifier.trim(), password, tenant?.slug),
       );
     },
     [persist, tenant],
@@ -127,8 +145,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, []);
 
   const value = useMemo(
-    () => ({ session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, register, logout }),
-    [session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, register, logout],
+    () => ({ session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, otpSend, otpVerify, register, logout }),
+    [session, tenant, restoring, selectTenant, clearTenant, login, verify2fa, otpSend, otpVerify, register, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

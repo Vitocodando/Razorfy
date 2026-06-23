@@ -6,6 +6,7 @@ import { config, googleOAuthEnabled } from '../config';
 import { BusinessError } from '../common/BusinessError';
 import { UserRole } from '../user/user.types';
 import { decryptSecret } from '../common/crypto';
+import { classifyIdentifier } from '../common/phone';
 import { verifyCode } from './twofa.service';
 
 const STAFF_ROLES: UserRole[] = ['BARBER', 'ADMIN', 'DEV'];
@@ -46,25 +47,29 @@ function getGoogleClient(): OAuth2Client {
 
 export async function register(data: {
   name: string;
-  email: string;
-  phone: string;
+  identifier: string;
   password: string;
   tenantSlug?: string;
 }) {
+  // FEAT-078: identifier é e-mail OU telefone.
+  const { email, phone } = classifyIdentifier(data.identifier);
   const tenantId = await resolveActiveTenant(data.tenantSlug);
+
   const existing = await prisma.user.findFirst({
-    where: { tenantId, email: { equals: data.email, mode: 'insensitive' } },
+    where: { tenantId, ...(email ? { email: { equals: email, mode: 'insensitive' } } : { phone }) },
   });
   if (existing) {
-    throw new BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409);
+    throw email
+      ? new BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409)
+      : new BusinessError('PHONE_ALREADY_EXISTS', 'Este telefone já está cadastrado.', 409);
   }
 
   const hash = await bcrypt.hash(data.password, 12);
   const user = await prisma.user.create({
     data: {
       name: data.name,
-      email: data.email.toLowerCase(),
-      phone: data.phone,
+      email: email ?? null,
+      phone: phone ?? null,
       password: hash,
       role: 'CLIENT',
       tenantId,
@@ -74,7 +79,7 @@ export async function register(data: {
   return sessionFor(user);
 }
 
-type LoginUser = { id: string; name: string; email: string; phone: string | null; role: string; tenantId: string | null; is2faEnabled: boolean };
+type LoginUser = { id: string; name: string; email: string | null; phone: string | null; role: string; tenantId: string | null; is2faEnabled: boolean };
 
 // FA01: se 2FA ligado, não entrega o JWT — retorna token intermediário de pré-autenticação.
 function loginResult(user: LoginUser) {
@@ -97,23 +102,28 @@ function preAuthTokenFor(userId: string): string {
   );
 }
 
-export async function login(email: string, password: string, tenantSlug?: string) {
-  // DEV (plataforma) é tenant-agnóstico: resolve antes do fluxo territorial.
-  const dev = await prisma.user.findFirst({
-    where: { role: 'DEV', email: { equals: email, mode: 'insensitive' } },
-  });
-  if (dev) {
-    if (!dev.password) throw new BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
-    const ok = await bcrypt.compare(password, dev.password);
-    if (!ok) throw new BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
-    return loginResult(dev);
+export async function login(identifier: string, password: string, tenantSlug?: string) {
+  // FEAT-078: identifier é e-mail OU telefone.
+  const { email, phone } = classifyIdentifier(identifier);
+
+  // DEV (plataforma) é tenant-agnóstico e sempre por e-mail.
+  if (email) {
+    const dev = await prisma.user.findFirst({
+      where: { role: 'DEV', email: { equals: email, mode: 'insensitive' } },
+    });
+    if (dev) {
+      if (!dev.password) throw new BusinessError('INVALID_CREDENTIALS', 'Credenciais inválidas.', 401);
+      const ok = await bcrypt.compare(password, dev.password);
+      if (!ok) throw new BusinessError('INVALID_CREDENTIALS', 'Credenciais inválidas.', 401);
+      return loginResult(dev);
+    }
   }
 
   const tenantId = await resolveActiveTenant(tenantSlug);
   const user = await prisma.user.findFirst({
-    where: { tenantId, email: { equals: email, mode: 'insensitive' } },
+    where: { tenantId, ...(email ? { email: { equals: email, mode: 'insensitive' } } : { phone }) },
   });
-  if (!user) throw new BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
+  if (!user) throw new BusinessError('INVALID_CREDENTIALS', 'Credenciais inválidas.', 401);
 
   // Conta criada apenas via Google não possui senha local.
   if (!user.password) {
@@ -121,7 +131,7 @@ export async function login(email: string, password: string, tenantSlug?: string
   }
 
   const valid = await bcrypt.compare(password, user.password);
-  if (!valid) throw new BusinessError('INVALID_CREDENTIALS', 'E-mail ou senha inválidos.', 401);
+  if (!valid) throw new BusinessError('INVALID_CREDENTIALS', 'Credenciais inválidas.', 401);
 
   return loginResult(user);
 }
@@ -227,11 +237,16 @@ export async function loginWithGoogle(code: string) {
 
 // Contrato consumido por frontend e mobile: { accessToken, user: { id, name, email, phone, role } }
 // phone pode ser null em contas criadas via Google (provedor não fornece telefone).
-function sessionFor(user: { id: string; name: string; email: string; phone: string | null; role: string; tenantId: string | null }) {
+function sessionFor(user: { id: string; name: string; email: string | null; phone: string | null; role: string; tenantId: string | null }) {
   return {
     accessToken: tokenFor(user),
-    user: { id: user.id, name: user.name, email: user.email, phone: user.phone ?? null, role: user.role, tenantId: user.tenantId },
+    user: { id: user.id, name: user.name, email: user.email ?? null, phone: user.phone ?? null, role: user.role, tenantId: user.tenantId },
   };
+}
+
+// Reuso por outros fluxos de autenticação (ex.: OTP por telefone — FEAT-077).
+export function buildSession(user: { id: string; name: string; email: string | null; phone: string | null; role: string; tenantId: string | null }) {
+  return sessionFor(user);
 }
 
 function tokenFor(user: { id: string; name: string; role: string; tenantId: string | null }) {

@@ -2,12 +2,21 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.tenantRouter = exports.barbershopRouter = void 0;
 const express_1 = require("express");
+const zod_1 = require("zod");
 const catalog_service_1 = require("./catalog.service");
 const availability_service_1 = require("../schedule/availability.service");
 const resolveTenant_1 = require("../middleware/resolveTenant");
 const asyncHandler_1 = require("../common/asyncHandler");
 const BusinessError_1 = require("../common/BusinessError");
 const prisma_1 = require("../prisma");
+const otp_service_1 = require("../auth/otp.service");
+// FEAT-077: schemas OTP por telefone.
+const OtpSendSchema = zod_1.z.object({ phone: zod_1.z.string().min(8).max(20) });
+const OtpVerifySchema = zod_1.z.object({
+    phone: zod_1.z.string().min(8).max(20),
+    code: zod_1.z.string().regex(/^\d{6}$/, 'O código deve ter exatamente 6 dígitos.'),
+    name: zod_1.z.string().trim().min(2).max(100).optional(),
+});
 // Discovery público de barbearias: /api/v1/barbershops?q=...
 exports.barbershopRouter = (0, express_1.Router)();
 exports.barbershopRouter.get('/', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
@@ -55,6 +64,15 @@ exports.tenantRouter.get('/connect/:code', (0, asyncHandler_1.asyncHandler)(asyn
     res.json({ tenantId: shop.id, name: shop.name, slug: shop.slug, connectionCode: shop.connectionCode, logoUrl: shop.logoUrl });
 }));
 exports.tenantRouter.use('/:tenantId', resolveTenant_1.resolveTenant);
+// FEAT-077: autenticação por telefone (OTP). resolveTenant garante tenant existente/ativo.
+exports.tenantRouter.post('/:tenantId/auth/otp/send', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { phone } = OtpSendSchema.parse(req.body);
+    res.json(await (0, otp_service_1.sendOtp)(req.tenantId, phone));
+}));
+exports.tenantRouter.post('/:tenantId/auth/otp/verify', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const { phone, code, name } = OtpVerifySchema.parse(req.body);
+    res.json(await (0, otp_service_1.verifyOtp)(req.tenantId, phone, code, name));
+}));
 exports.tenantRouter.get('/:tenantId/services', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     res.json(await (0, catalog_service_1.findActiveServices)(req.tenantId));
 }));

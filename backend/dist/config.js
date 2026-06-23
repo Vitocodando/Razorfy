@@ -21,6 +21,8 @@ const Schema = zod_1.z.object({
     BUSINESS_TIMEZONE: zod_1.z.string().default('America/Sao_Paulo'),
     CORS_ALLOWED_ORIGIN: zod_1.z.string().default('http://localhost:5173'),
     WHATSAPP_GATEWAY_URL: zod_1.z.string().optional(),
+    // Z-API (FEAT-079): token de segurança da conta (header Client-Token).
+    WHATSAPP_CLIENT_TOKEN: zod_1.z.string().optional(),
     NOTIFICATION_MAX_ATTEMPTS: zod_1.z.coerce.number().int().default(5),
     DEV_BOOTSTRAP_ENABLED: zod_1.z.string().transform(v => v === 'true').default('false'),
     DEV_ADMIN_EMAIL: zod_1.z.string().email().optional(),

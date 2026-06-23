@@ -1,10 +1,20 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { findActiveServices, findBarbers } from './catalog.service';
 import { availableStarts } from '../schedule/availability.service';
 import { resolveTenant } from '../middleware/resolveTenant';
 import { asyncHandler } from '../common/asyncHandler';
 import { BusinessError } from '../common/BusinessError';
 import { prisma } from '../prisma';
+import { sendOtp, verifyOtp } from '../auth/otp.service';
+
+// FEAT-077: schemas OTP por telefone.
+const OtpSendSchema = z.object({ phone: z.string().min(8).max(20) });
+const OtpVerifySchema = z.object({
+  phone: z.string().min(8).max(20),
+  code: z.string().regex(/^\d{6}$/, 'O código deve ter exatamente 6 dígitos.'),
+  name: z.string().trim().min(2).max(100).optional(),
+});
 
 // Discovery público de barbearias: /api/v1/barbershops?q=...
 export const barbershopRouter = Router();
@@ -56,6 +66,17 @@ tenantRouter.get('/connect/:code', asyncHandler(async (req, res) => {
 }));
 
 tenantRouter.use('/:tenantId', resolveTenant);
+
+// FEAT-077: autenticação por telefone (OTP). resolveTenant garante tenant existente/ativo.
+tenantRouter.post('/:tenantId/auth/otp/send', asyncHandler(async (req, res) => {
+  const { phone } = OtpSendSchema.parse(req.body);
+  res.json(await sendOtp(req.tenantId!, phone));
+}));
+
+tenantRouter.post('/:tenantId/auth/otp/verify', asyncHandler(async (req, res) => {
+  const { phone, code, name } = OtpVerifySchema.parse(req.body);
+  res.json(await verifyOtp(req.tenantId!, phone, code, name));
+}));
 
 tenantRouter.get('/:tenantId/services', asyncHandler(async (req, res) => {
   res.json(await findActiveServices(req.tenantId!));

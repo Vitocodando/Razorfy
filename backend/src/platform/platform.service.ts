@@ -26,7 +26,7 @@ export async function listTenants(page: number, size: number) {
         select: { tenantId: true, name: true, email: true, phone: true },
       })
     : [];
-  const adminByTenant = new Map<string, { name: string; email: string; phone: string | null }>();
+  const adminByTenant = new Map<string, { name: string; email: string | null; phone: string | null }>();
   for (const a of admins) {
     if (a.tenantId && !adminByTenant.has(a.tenantId)) {
       adminByTenant.set(a.tenantId, { name: a.name, email: a.email, phone: a.phone });

@@ -4,6 +4,7 @@ exports.processOutbox = processOutbox;
 exports.startOutboxProcessor = startOutboxProcessor;
 const prisma_1 = require("../prisma");
 const config_1 = require("../config");
+const whatsapp_1 = require("./whatsapp");
 async function processOutbox() {
     const messages = await prisma_1.prisma.notificationOutbox.findMany({
         where: {
@@ -83,16 +84,7 @@ async function send(msg) {
         console.log(`[push] enviado para ${msg.destination}: ${msg.eventType}`);
         return;
     }
-    const url = config_1.config.WHATSAPP_GATEWAY_URL;
-    if (!url) {
-        console.log(`[whatsapp] simulado para ${msg.destination}: ${msg.eventType}`);
-        return;
-    }
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: msg.destination, event: msg.eventType, payload: msg.payload }),
-    });
-    if (!response.ok)
-        throw new Error(`HTTP ${response.status}`);
+    // WHATSAPP via Z-API: renderiza texto pt-BR do payload e envia.
+    const payload = (msg.payload && typeof msg.payload === 'object' ? msg.payload : {});
+    await (0, whatsapp_1.sendWhatsappText)(msg.destination, (0, whatsapp_1.renderMessage)(msg.eventType, payload));
 }

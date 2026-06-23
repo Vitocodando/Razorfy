@@ -20,11 +20,14 @@ import { colors, fonts } from '../theme';
 type Mode = 'login' | 'register';
 
 export function AuthScreen() {
-  const { login, verify2fa, register, tenant, clearTenant } = useAuth();
+  const { login, verify2fa, otpSend, otpVerify, register, tenant, clearTenant } = useAuth();
   const [mode, setMode] = useState<Mode>('login');
+  const [otpStage, setOtpStage] = useState<'phone' | 'code' | null>(null);
+  const [otpPhone, setOtpPhone] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpName, setOtpName] = useState('');
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [identifier, setIdentifier] = useState(''); // FEAT-078: e-mail ou telefone
   const [password, setPassword] = useState('');
   const [secure, setSecure] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -38,12 +41,8 @@ export function AuthScreen() {
       setError('Informe seu nome completo.');
       return;
     }
-    if (!email.includes('@')) {
-      setError('Informe um e-mail válido.');
-      return;
-    }
-    if (mode === 'register' && !/^\+?[1-9]\d{1,14}$/.test(phone.trim())) {
-      setError('Informe o WhatsApp no formato internacional, como +5511999999999.');
+    if (identifier.trim().length < 3) {
+      setError('Informe seu e-mail ou telefone.');
       return;
     }
     if (password.length < 8) {
@@ -54,10 +53,10 @@ export function AuthScreen() {
     setLoading(true);
     try {
       if (mode === 'login') {
-        const r = await login(email, password);
+        const r = await login(identifier, password);
         if (r.require2fa && r.preAuthToken) { setPreAuth(r.preAuthToken); setCode(''); }
       } else {
-        await register(name, email, phone, password);
+        await register(name, identifier, password);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível autenticar.');
@@ -78,9 +77,74 @@ export function AuthScreen() {
     }
   }
 
+  // FEAT-077: envia OTP para o telefone.
+  async function sendOtpCode() {
+    setError('');
+    if (otpPhone.replace(/\D/g, '').length < 10) { setError('Informe um telefone válido com DDD.'); return; }
+    setLoading(true);
+    try {
+      await otpSend(otpPhone);
+      setOtpStage('code'); setOtpCode('');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível enviar o código.');
+    } finally { setLoading(false); }
+  }
+
+  async function verifyOtpCode() {
+    if (otpCode.length !== 6) return;
+    setError(''); setLoading(true);
+    try {
+      await otpVerify(otpPhone, otpCode, otpName.trim() || undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Código inválido.');
+    } finally { setLoading(false); }
+  }
+
   function changeMode(nextMode: Mode) {
     setMode(nextMode);
     setError('');
+  }
+
+  // FEAT-077: fluxo de login/cadastro por telefone (OTP).
+  if (otpStage) {
+    const back = () => { setOtpStage(null); setOtpPhone(''); setOtpCode(''); setOtpName(''); setError(''); };
+    return (
+      <LinearGradient colors={[colors.blueDark, colors.blue, '#3949ab']} style={styles.background}>
+        <SafeAreaView style={styles.safeArea}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+              <View style={styles.formCard}>
+                <Ionicons name="chatbubble-ellipses-outline" size={40} color={colors.blue} style={{ alignSelf: 'center' }} />
+                {otpStage === 'phone' ? (
+                  <>
+                    <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Entrar com telefone</Text>
+                    <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviaremos um código por WhatsApp.</Text>
+                    <ErrorMessage message={error} />
+                    <Field icon="call-outline" label="Telefone" placeholder="+55 11 98888-7777" value={otpPhone} onChangeText={setOtpPhone} keyboardType="phone-pad" textContentType="telephoneNumber" />
+                    <PrimaryButton label={loading ? 'Enviando...' : 'Enviar código'} onPress={sendOtpCode} disabled={loading} />
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Digite o código</Text>
+                    <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviado para {otpPhone} via WhatsApp.</Text>
+                    <ErrorMessage message={error} />
+                    <TextInput autoFocus keyboardType="number-pad" value={otpCode} onChangeText={(t) => setOtpCode(t.replace(/\D/g, '').slice(0, 6))} placeholder="000000" placeholderTextColor={colors.muted} maxLength={6} style={styles.codeInput} />
+                    <Field icon="person-outline" label="Nome (se for seu primeiro acesso)" placeholder="Seu nome" value={otpName} onChangeText={setOtpName} textContentType="name" />
+                    <PrimaryButton label={loading ? 'Verificando...' : 'Verificar'} onPress={verifyOtpCode} disabled={loading || otpCode.length !== 6} />
+                    <Pressable onPress={() => { setOtpStage('phone'); setError(''); }} style={{ marginTop: 10, alignSelf: 'center' }}>
+                      <Text style={styles.tenantChipChange}>Reenviar / trocar número</Text>
+                    </Pressable>
+                  </>
+                )}
+                <Pressable onPress={back} style={{ marginTop: 12, alignSelf: 'center' }}>
+                  <Text style={styles.tenantChipChange}>Voltar</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </LinearGradient>
+    );
   }
 
   // FA01: tela de verificação 2FA após credenciais válidas.
@@ -199,27 +263,14 @@ export function AuthScreen() {
               ) : null}
 
               <Field
-                icon="mail-outline"
-                label="E-mail"
-                placeholder="voce@email.com"
-                value={email}
-                onChangeText={setEmail}
+                icon="at-outline"
+                label="E-mail ou telefone"
+                placeholder="voce@email.com ou +5511988887777"
+                value={identifier}
+                onChangeText={setIdentifier}
                 autoCapitalize="none"
-                keyboardType="email-address"
-                textContentType="emailAddress"
+                textContentType="username"
               />
-
-              {mode === 'register' ? (
-                <Field
-                  icon="logo-whatsapp"
-                  label="WhatsApp"
-                  placeholder="+5511999999999"
-                  value={phone}
-                  onChangeText={setPhone}
-                  keyboardType="phone-pad"
-                  textContentType="telephoneNumber"
-                />
-              ) : null}
 
               <View>
                 <Field
@@ -251,6 +302,14 @@ export function AuthScreen() {
                 loading={loading}
                 onPress={submit}
               />
+
+              {/* FEAT-077/078: cadastro por telefone (OTP) — apenas no cadastro */}
+              {mode === 'register' ? (
+                <Pressable style={styles.otpEntry} onPress={() => { setError(''); setOtpStage('phone'); }}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.blue} />
+                  <Text style={styles.otpEntryText}>Cadastrar com telefone (WhatsApp)</Text>
+                </Pressable>
+              ) : null}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -345,6 +404,15 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 28,
   },
+  otpEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingVertical: 8,
+  },
+  otpEntryText: { color: colors.blue, fontFamily: fonts.bold, fontSize: 13 },
   codeInput: {
     height: 58,
     borderRadius: 15,

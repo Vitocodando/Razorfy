@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-21T03:30:00
+last_updated: 2026-06-22T20:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1061,6 +1061,56 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `HIGH`
 - `target_release`: `UNRELEASED`
 
+### FEAT-077 - Autenticação via Telefone (OTP por WhatsApp)
+
+- `status`: `IMPLEMENTED`
+- `area`: `AUTH`
+- `actors`: `CLIENT`, `Gateway WhatsApp/SMS` (externo)
+- `description`: Cadastro/login de clientes por telefone com código de uso único (OTP, 6 dígitos) enviado por WhatsApp (fallback SMS). Reduz fricção de cadastro e garante base com telefones válidos. **Não inclui** magic link nem voice OTP. **Nota arquitetural:** STS pedia Redis; projeto usa Postgres/Supabase → OTP armazenado em **memória** (Map + TTL, mesma estratégia do rate-limiter do 2FA). Single-instance OK; produção multi-instância → trocar por Redis (chave `otp:verification:{tenantId}:{e164}`, TTL 300s).
+- `business_rules`: **RN01** — OTP válido por 5 min (300s), destruído após expirar. **RN02** — rate limit de envio: 3 por hora por (tenant, telefone) → `RATE_LIMIT_EXCEEDED 429`. **RN03** — código numérico de 6 dígitos. **RN04** — telefone único por tenant. **V01** — normalização E.164 (assume +55 se sem DDI; tira parênteses/espaços/traços). **V02** — código destruído (`delete`) imediatamente após acerto (anti-replay). **FA01/CT01** — 3 erros consecutivos invalidam o OTP (`TOO_MANY_OTP_ATTEMPTS`).
+- `api`: `POST /api/v1/tenants/:tenantId/auth/otp/send` `{phone}` → `{message, expiresInSeconds:300, action:'OTP_DISPATCHED'}`; `POST /api/v1/tenants/:tenantId/auth/otp/verify` `{phone, code, name?}` → `{accessToken, user, isNewUser}`. Públicas, via `resolveTenant` (tenant existente/ativo). Erros: `OTP_INVALID 401`, `OTP_EXPIRED_OR_NOT_FOUND 410`, `RATE_LIMIT_EXCEEDED 429`, `GATEWAY_UNAVAILABLE 503`, `NAME_REQUIRED 422` (novo usuário sem nome).
+- `dispatch`: envia via `WHATSAPP_GATEWAY_URL`; gateway configurado e falhando → 503 **sem gravar** o OTP (dependência SLA). Sem gateway (dev) → loga o código e grava (testável).
+- `frontend`: mobile — botão "Entrar com telefone (WhatsApp)" no `AuthScreen` → telefone → código (+ nome no 1º acesso); `AuthContext.otpSend`/`otpVerify` (escopados ao tenant conectado). Web: backend pronto; UI OTP não adicionada (web é orientado a barbearia/admin).
+- `database_changes`: `0014_phone_otp` — `users.email` vira NULL-able; `users.is_phone_verified BOOLEAN NOT NULL DEFAULT false`; `chk_users_auth_method` relaxado para aceitar `is_phone_verified = true` como meio de auth (além de senha/Google).
+- `api_compatibility`: `COMPATIBLE` (e-mail opcional é aditivo; rotas novas).
+- `depends_on`: `FEAT-073` (multi-tenant), `FEAT-074` (tenant conectado)
+- `acceptance`: send→200 + código; verify novo→cria conta `is_phone_verified=true` + JWT (isNewUser true); verify existente→JWT (isNewUser false); replay do mesmo código→410; 3 erros→`TOO_MANY_OTP_ATTEMPTS` e código correto seguinte→410; 4º envio na janela→429; `(11) 96000-1122`→`+5511960001122`.
+- `tests`: build backend ✓, mobile `tsc` ✓; smoke HTTP (dev, código via log) — send 200, verify novo→token, replay→`410 OTP_EXPIRED_OR_NOT_FOUND`, verify existente→token, 3x errado→`OTP_INVALID`/`OTP_INVALID`/`TOO_MANY_OTP_ATTEMPTS`, correto após 3 erros→410, 4º envio→`429 RATE_LIMIT_EXCEEDED`, normalização E.164.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-078 - Credencial unificada (e-mail OU telefone) + paridade web/app
+
+- `status`: `IMPLEMENTED`
+- `area`: `AUTH`
+- `actors`: `CLIENT`, `ADMIN`, `BARBER`, `DEV`
+- `description`: Login e cadastro por senha passam a aceitar um único campo **identifier** que pode ser e-mail OU telefone. Backend classifica o identificador (contém `@` → e-mail; senão → telefone normalizado E.164) e busca/cria o usuário pelo campo correspondente. Além disso, a **aplicação web ganha paridade com o app**: fluxo de login por telefone (OTP via WhatsApp, FEAT-077) agora também na web.
+- `business_rules`: identifier com `@` → validado como e-mail (minúsculo); senão → `normalizeE164` (+55 default). Login busca por e-mail OU telefone no tenant; DEV continua só por e-mail. Registro grava o campo informado (o outro fica nulo); unicidade por tenant → `EMAIL_ALREADY_EXISTS`/`PHONE_ALREADY_EXISTS 409`. Identificador inválido → `INVALID_IDENTIFIER 422`. Reaproveita `is_phone_verified`/e-mail opcional do `0014`.
+- `api`: `POST /auth/login` `{ identifier, password, tenantSlug? }`; `POST /auth/register` `{ name, identifier, password, tenantSlug? }`. Contrato anterior (`email`/`phone` separados) substituído por `identifier`.
+- `frontend`: web — `AuthScreen` login/registro com campo "E-mail ou telefone"; botão "Entrar com telefone (WhatsApp)" → `PhoneOtpScreen` (telefone → código → nome no 1º acesso) consumindo `/tenants/:id/auth/otp/*`. mobile — mesmo campo unificado; `api.login`/`register` e `AuthContext` por identifier (fluxo OTP já existia em FEAT-077).
+- `refactor`: `normalizeE164` movido para `common/phone.ts` + novo `classifyIdentifier` (evita ciclo `auth.service` ↔ `otp.service`).
+- `api_compatibility`: `BREAKING` no corpo de `/auth/login` e `/auth/register` (passa a exigir `identifier`); web e app atualizados no mesmo release.
+- `depends_on`: `FEAT-002`, `FEAT-077`
+- `acceptance`: registrar/logar por telefone e por e-mail; admin (e-mail) intacto; senha errada → `INVALID_CREDENTIALS`; telefone em formatos diferentes resolve o mesmo usuário; web faz login por OTP igual ao app.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓, mobile `tsc` ✓; smoke HTTP — register telefone→token, login telefone (formato diferente)→token, register e-mail→token, login e-mail→token, admin e-mail→200, senha errada→`INVALID_CREDENTIALS`.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-079 - Integração de notificações WhatsApp (Z-API)
+
+- `status`: `IMPLEMENTED`
+- `area`: `NOTIFICATION`
+- `actors`: `CLIENT`, `Z-API` (gateway externo)
+- `description`: Adapter Z-API para o envio real das notificações WhatsApp já orquestradas (outbox + processor). Renderiza o texto pt-BR a partir do `eventType`/payload, autentica com `Client-Token` e envia no contrato Z-API `{phone, message}`. Cobre lembrete (2h antes), confirmação, cancelamento, conclusão, no-show, win-back e o OTP de cadastro (FEAT-077). Z-API envia texto livre → não exige template HSM da Meta.
+- `implementation`: `notification/whatsapp.ts` — `renderMessage(eventType, payload)` (mapa de eventos → texto pt-BR; eventos com `body` pronto reusam o texto), `sendWhatsappText(destination, message)` (telefone → dígitos sem `+`, header `Client-Token`, POST send-text; lança em !ok → retry/backoff do processor). `outboxProcessor.send` e `otp.service` passam a usar o adapter.
+- `config`: `WHATSAPP_GATEWAY_URL` = endpoint send-text completo da instância (`https://api.z-api.io/instances/{id}/token/{token}/send-text`); `WHATSAPP_CLIENT_TOKEN` = token de segurança da conta. Ausentes → modo simulado (log), sistema não quebra.
+- `pending_ops` (fora do código): criar conta/instância Z-API, conectar o WhatsApp (QR), preencher as 2 variáveis, reiniciar. Sem isso, notificações ficam em modo simulado.
+- `depends_on`: `FEAT-077`
+- `acceptance`: render correto por evento; com gateway configurado, mensagens saem via Z-API; falha do gateway → retry (5x, backoff 5min) e `FAILED` ao esgotar; consentimento (`notificationWhatsappEnabled`) respeitado.
+- `tests`: build backend ✓; render validado para todos os eventos (CONFIRMED/CANCELLED/CONCLUDED/REMINDER/NO_SHOW_PENALTY/WIN_BACK).
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -1113,6 +1163,14 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-046` | Login de conta com 2FA → 202 `REQUIRE_2FA` + `preAuthToken` (claim `PRE_AUTH`, barrado em rotas normais) | `FEAT-076` |
 | `RN-047` | verify-2fa: 5 falhas → bloqueio de 15 min (`TOO_MANY_ATTEMPTS`) | `FEAT-076` |
 | `RN-048` | Desativar 2FA exige senha atual E código TOTP válido | `FEAT-076` |
+| `RN-049` | OTP de telefone válido por 5 min, destruído após expirar | `FEAT-077` |
+| `RN-050` | Envio de OTP: 3 por hora por (tenant, telefone) → `RATE_LIMIT_EXCEEDED` | `FEAT-077` |
+| `RN-051` | OTP destruído imediatamente após acerto (anti-replay) | `FEAT-077` |
+| `RN-052` | 3 erros consecutivos invalidam o OTP (`TOO_MANY_OTP_ATTEMPTS`) | `FEAT-077` |
+| `RN-053` | Telefone normalizado para E.164 (+55 default) antes de cache/consulta | `FEAT-077` |
+| `RN-054` | Conta verificada por telefone é meio de auth válido (e-mail opcional) | `FEAT-077` |
+| `RN-055` | Login/registro por senha aceitam identifier = e-mail OU telefone (E.164) | `FEAT-078` |
+| `RN-056` | Web e app têm paridade de autenticação (inclui login por telefone/OTP) | `FEAT-078` |
 
 ## 5. Registro de bugs
 

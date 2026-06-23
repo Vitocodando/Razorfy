@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { config } from '../config';
+import { renderMessage, sendWhatsappText } from './whatsapp';
 
 export async function processOutbox(): Promise<number> {
   const messages = await prisma.notificationOutbox.findMany({
@@ -81,15 +82,7 @@ async function send(msg: { channel: string; destination: string; eventType: stri
     console.log(`[push] enviado para ${msg.destination}: ${msg.eventType}`);
     return;
   }
-  const url = config.WHATSAPP_GATEWAY_URL;
-  if (!url) {
-    console.log(`[whatsapp] simulado para ${msg.destination}: ${msg.eventType}`);
-    return;
-  }
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: msg.destination, event: msg.eventType, payload: msg.payload }),
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  // WHATSAPP via Z-API: renderiza texto pt-BR do payload e envia.
+  const payload = (msg.payload && typeof msg.payload === 'object' ? msg.payload : {}) as Record<string, unknown>;
+  await sendWhatsappText(msg.destination, renderMessage(msg.eventType, payload));
 }

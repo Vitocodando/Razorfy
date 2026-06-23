@@ -1,15 +1,15 @@
 import { z } from 'zod';
 
+// FEAT-078: credencial = identifier (e-mail OU telefone).
 export const RegisterSchema = z.object({
   name: z.string().min(3).max(100),
-  email: z.string().email().max(150),
-  phone: z.string().min(10).max(20),
+  identifier: z.string().min(3).max(150),
   password: z.string().min(6).max(100),
   tenantSlug: z.string().max(50).optional(),
 });
 
 export const LoginSchema = z.object({
-  email: z.string().email(),
+  identifier: z.string().min(3).max(150),
   password: z.string().min(1),
   tenantSlug: z.string().max(50).optional(),
 });

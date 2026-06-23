@@ -45,7 +45,7 @@ async function setup2fa(userId) {
     const tenant = user.tenantId
         ? await prisma_1.prisma.barbershop.findUnique({ where: { id: user.tenantId }, select: { name: true } })
         : null;
-    const otpAuthUri = (0, twofa_service_1.buildOtpAuthUri)(secret, user.email, tenant?.name);
+    const otpAuthUri = (0, twofa_service_1.buildOtpAuthUri)(secret, user.email ?? user.phone ?? user.id, tenant?.name);
     // Persiste o segredo criptografado como pendente (is2faEnabled permanece false).
     await prisma_1.prisma.user.update({ where: { id: userId }, data: { totpSecret: (0, crypto_2.encryptSecret)(secret) } });
     return { otpAuthUri, manualSecretKey: secret };

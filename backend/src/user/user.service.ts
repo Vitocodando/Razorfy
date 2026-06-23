@@ -8,7 +8,7 @@ import { generateSecret, buildOtpAuthUri, verifyCode } from '../auth/twofa.servi
 const FUTURE_BLOCKING = ['CONFIRMED', 'PENDING_PAYMENT'];
 
 function publicUser(u: {
-  id: string; name: string; email: string; phone: string | null;
+  id: string; name: string; email: string | null; phone: string | null;
   notificationPushEnabled: boolean; notificationWhatsappEnabled: boolean;
 }) {
   return {
@@ -38,7 +38,7 @@ export async function setup2fa(userId: string) {
   const tenant = user.tenantId
     ? await prisma.barbershop.findUnique({ where: { id: user.tenantId }, select: { name: true } })
     : null;
-  const otpAuthUri = buildOtpAuthUri(secret, user.email, tenant?.name);
+  const otpAuthUri = buildOtpAuthUri(secret, user.email ?? user.phone ?? user.id, tenant?.name);
 
   // Persiste o segredo criptografado como pendente (is2faEnabled permanece false).
   await prisma.user.update({ where: { id: userId }, data: { totpSecret: encryptSecret(secret) } });

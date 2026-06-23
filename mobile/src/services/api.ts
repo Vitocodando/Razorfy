@@ -88,15 +88,28 @@ export const api = {
     return { id: r.tenantId, name: r.name, slug: r.slug, connectionCode: r.connectionCode, logoUrl: r.logoUrl };
   },
 
-  login: (email: string, password: string, tenantSlug?: string) =>
+  // FEAT-078: identifier = e-mail ou telefone.
+  login: (identifier: string, password: string, tenantSlug?: string) =>
     request<LoginResponse>('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password, tenantSlug }),
+      body: JSON.stringify({ identifier, password, tenantSlug }),
     }),
 
   // FEAT-076: troca preAuthToken + código TOTP pelo JWT final.
   verify2fa: (preAuthToken: string, code: string) =>
     request<Session>('/auth/login/verify-2fa', { method: 'POST', body: JSON.stringify({ code }) }, preAuthToken),
+
+  // FEAT-077: autenticação por telefone (OTP).
+  otpSend: (tenantId: string, phone: string) =>
+    request<{ message: string; expiresInSeconds: number; action: string }>(
+      `/tenants/${tenantId}/auth/otp/send`,
+      { method: 'POST', body: JSON.stringify({ phone }) },
+    ),
+  otpVerify: (tenantId: string, phone: string, code: string, name?: string) =>
+    request<Session & { isNewUser: boolean }>(
+      `/tenants/${tenantId}/auth/otp/verify`,
+      { method: 'POST', body: JSON.stringify({ phone, code, name }) },
+    ),
 
   setup2fa: (token: string) => request<TwoFaSetup>('/users/me/2fa/setup', { method: 'POST' }, token),
   enable2fa: (token: string, code: string) =>
@@ -105,10 +118,10 @@ export const api = {
     request<void>('/users/me/2fa', { method: 'DELETE', body: JSON.stringify({ currentPassword, code }) }, token),
   me: (token: string) => request<{ is2faEnabled: boolean; hasPassword: boolean }>('/users/me', {}, token),
 
-  register: (name: string, email: string, phone: string, password: string, tenantSlug?: string) =>
+  register: (name: string, identifier: string, password: string, tenantSlug?: string) =>
     request<Session>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone, password, tenantSlug }),
+      body: JSON.stringify({ name, identifier, password, tenantSlug }),
     }),
 
   // Catálogo contextualizado por tenant (legado sem tenantId → tenant default).

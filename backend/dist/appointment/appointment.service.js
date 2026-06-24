@@ -52,6 +52,7 @@ const auditSvc = __importStar(require("../audit/audit.service"));
 const notifSvc = __importStar(require("../notification/notification.service"));
 const mockGateway_1 = require("../payment/mockGateway");
 const appointment_policy_1 = require("./appointment.policy");
+const eventBus_1 = require("../events/eventBus");
 const BLOCKING_STATUSES = ['PENDING_PAYMENT', 'CONFIRMED'];
 async function lockAppointment(tx, id) {
     const rows = await tx.$queryRaw `
@@ -89,7 +90,7 @@ async function createAppointment(clientId, body, tenantId) {
     if (couponCode && requestedCashbackFlag) {
         throw new BusinessError_1.BusinessError('PROMOTION_CONFLICT', 'Cupom de desconto e saldo de cashback não podem ser usados na mesma transação.', 422);
     }
-    return prisma_1.prisma.$transaction(async (tx) => {
+    const result = await prisma_1.prisma.$transaction(async (tx) => {
         const client = await tx.user.findUnique({ where: { id: clientId } });
         if (!client)
             throw new BusinessError_1.BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
@@ -215,9 +216,16 @@ async function createAppointment(clientId, body, tenantId) {
         await auditSvc.statusChanged(tx, appointment.id, null, initialStatus, clientId, { source: 'CREATE' });
         return { appointment, paymentPayload };
     });
+    // RN01: evento despachado SOMENTE após o commit da transação.
+    (0, eventBus_1.publishDomainEvent)({
+        tenantId: result.appointment.tenantId,
+        eventType: 'APPOINTMENT_CREATED',
+        payload: { appointmentId: result.appointment.id, status: result.appointment.status },
+    });
+    return result;
 }
 async function confirmPayment(appointmentId, paymentReference) {
-    return prisma_1.prisma.$transaction(async (tx) => {
+    const result = await prisma_1.prisma.$transaction(async (tx) => {
         const appt = await lockAppointment(tx, appointmentId);
         if (appt.status === 'CONFIRMED')
             return appt;
@@ -256,9 +264,15 @@ async function confirmPayment(appointmentId, paymentReference) {
         await auditSvc.statusChanged(tx, appt.id, 'PENDING_PAYMENT', 'CONFIRMED', null, { source: 'PAYMENT_WEBHOOK' });
         return updated;
     });
+    (0, eventBus_1.publishDomainEvent)({
+        tenantId: result.tenantId,
+        eventType: 'APPOINTMENT_CONFIRMED',
+        payload: { appointmentId: result.id, status: result.status },
+    });
+    return result;
 }
 async function cancelAppointment(appointmentId, actorId) {
-    return prisma_1.prisma.$transaction(async (tx) => {
+    const result = await prisma_1.prisma.$transaction(async (tx) => {
         const appt = await lockAppointment(tx, appointmentId);
         const actor = await tx.user.findUnique({ where: { id: actorId } });
         if (!actor)
@@ -294,9 +308,15 @@ async function cancelAppointment(appointmentId, actorId) {
         await notifSvc.appointmentEvent(tx, apptData({ ...appt, status: 'CANCELLED', client: updated.client, barber: updated.barber }), 'APPOINTMENT_CANCELLED');
         return updated;
     });
+    (0, eventBus_1.publishDomainEvent)({
+        tenantId: result.tenantId,
+        eventType: 'APPOINTMENT_CANCELED',
+        payload: { appointmentId: result.id, status: result.status },
+    });
+    return result;
 }
 async function concludeAppointment(appointmentId, actorId) {
-    return prisma_1.prisma.$transaction(async (tx) => {
+    const result = await prisma_1.prisma.$transaction(async (tx) => {
         const appt = await lockAppointment(tx, appointmentId);
         const actor = await tx.user.findUnique({ where: { id: actorId } });
         if (!actor)
@@ -323,6 +343,12 @@ async function concludeAppointment(appointmentId, actorId) {
         await notifSvc.appointmentEvent(tx, apptData({ ...appt, status: 'CONCLUDED', client: updated.client, barber: updated.barber }), 'APPOINTMENT_CONCLUDED');
         return updated;
     });
+    (0, eventBus_1.publishDomainEvent)({
+        tenantId: result.tenantId,
+        eventType: 'APPOINTMENT_CONCLUDED',
+        payload: { appointmentId: result.id, status: result.status },
+    });
+    return result;
 }
 async function expirePaymentHold(appointmentId) {
     return prisma_1.prisma.$transaction(async (tx) => {

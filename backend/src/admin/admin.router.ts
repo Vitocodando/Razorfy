@@ -46,6 +46,7 @@ import {
   updateCoupon,
   upsertCommission,
 } from './admin.service';
+import { getAnalytics } from './analytics.service';
 
 export const adminRouter = Router();
 
@@ -186,6 +187,12 @@ adminRouter.delete('/services/:id', asyncHandler(async (req, res) => {
 // Barbearia do admin (código de conexão / QR)
 adminRouter.get('/barbershop', asyncHandler(async (req, res) => {
   res.json(await getMyBarbershop(T(req)));
+}));
+
+// FEAT-081: BFF de analytics financeiro (3 datasets para os gráficos).
+adminRouter.get('/analytics', asyncHandler(async (req, res) => {
+  const range = typeof req.query.range === 'string' ? req.query.range : 'LAST_7_DAYS';
+  res.json(await getAnalytics(T(req), range));
 }));
 
 // Configurações globais (RF04) — cache invalidado no PUT

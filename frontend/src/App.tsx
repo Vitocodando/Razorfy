@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, InputHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
 
@@ -2609,7 +2611,15 @@ function ClientNotesModal({
 
 // ---------- Centro de Comando (ADMIN) ----------
 
-type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection'
+type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection' | 'analytics'
+
+type AnalyticsRange = 'LAST_7_DAYS' | 'LAST_14_DAYS' | 'CURRENT_MONTH'
+type AnalyticsData = {
+  range: AnalyticsRange
+  generalTimeline: { date: string; formattedDate: string; revenue: number }[]
+  barberBreakdown: { barberId: string; barberName: string; revenue: number }[]
+  dayOfWeekBreakdown: { dayIndex: number; dayName: string; revenue: number }[]
+}
 type GlobalSettingsData = { noShowToleranceMinutes: number; defaultCashbackPct: number }
 
 type AdminBarberRow = {
@@ -2895,7 +2905,22 @@ function AdminCommandCenter({ session }: { session: Session }) {
   const token = session.accessToken
   const [date, setDate] = useState(today())
   const [tab, setTab] = useState<AdminTab>('overview')
-  const [dashboard, setDashboard] = useState<AdminDashboard | null>(null)
+  // FEAT-080: dashboard/grid via React Query — revalidação passiva (window focus + polling).
+  // queryKey inclui a data → troca de data refaz só esta query (invalidação granular, RN03).
+  const { data: dashboard = null, isLoading: dashboardLoading } = useQuery({
+    queryKey: ['admin-dashboard', date],
+    queryFn: () => request<AdminDashboard>(`/admin/dashboard?date=${date}`, {}, token),
+  })
+  const queryClient = useQueryClient()
+  // RN03: invalida só a query do dashboard (grid/alertas) após ações que a afetam.
+  const refreshDashboard = () => queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] })
+
+  // FEAT-081: analytics financeiro (BFF) com filtro temporal; React Query (window-focus/polling).
+  const [analyticsRange, setAnalyticsRange] = useState<AnalyticsRange>('LAST_7_DAYS')
+  const { data: analytics = null, isLoading: analyticsLoading } = useQuery({
+    queryKey: ['admin-analytics', analyticsRange],
+    queryFn: () => request<AnalyticsData>(`/admin/analytics?range=${analyticsRange}`, {}, token),
+  })
   const [barbers, setBarbers] = useState<Barber[]>([])
   const [services, setServices] = useState<ServiceItem[]>([])
   const [coupons, setCoupons] = useState<CouponItem[]>([])
@@ -2926,8 +2951,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
     setLoading(true)
     setError('')
     try {
-      const [dash, barberList, serviceList, couponList, commissionList, vacationList, settlementData, adminBarberList, adminServiceList, settingsData] = await Promise.all([
-        request<AdminDashboard>(`/admin/dashboard?date=${nextDate}`, {}, token),
+      const [barberList, serviceList, couponList, commissionList, vacationList, settlementData, adminBarberList, adminServiceList, settingsData] = await Promise.all([
         request<Barber[]>('/barbers'),
         request<ServiceItem[]>('/services'),
         request<CouponItem[]>('/admin/coupons', {}, token),
@@ -2938,7 +2962,6 @@ function AdminCommandCenter({ session }: { session: Session }) {
         request<AdminServiceRow[]>('/admin/services', {}, token),
         request<GlobalSettingsData>('/admin/global-settings', {}, token),
       ])
-      setDashboard(dash)
       setBarbers(barberList)
       setServices(serviceList)
       setCoupons(couponList)
@@ -3203,7 +3226,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
         body: JSON.stringify({ reason: 'Cliente ultrapassou a tolerância limite de 15 minutos e não avisou.' }),
       }, token)
       setSuccess('No-show aplicado e carteira zerada quando havia saldo.')
-      await loadAll()
+      void refreshDashboard()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível aplicar No-Show.')
     } finally {
@@ -3216,7 +3239,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
     try {
       await request(`/admin/alerts/${id}/resolve`, { method: 'PATCH' }, token)
       setSuccess('Alerta resolvido.')
-      await loadAll()
+      void refreshDashboard()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível resolver o alerta.')
     } finally {
@@ -3263,7 +3286,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
         {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
         {success && <div className="mb-4"><SuccessBanner message={success} /></div>}
 
-        {loading && !dashboard ? (
+        {(loading || dashboardLoading) && !dashboard ? (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {[1, 2, 3, 4].map((i) => <div key={i} className="h-28 bg-surface-container-lowest rounded-xl animate-pulse" />)}
           </div>
@@ -3319,6 +3342,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
                 { key: 'vacations' as const, label: 'Férias', icon: 'beach_access' },
                 { key: 'barbers' as const, label: 'Barbeiros', icon: 'group' },
                 { key: 'services' as const, label: 'Serviços', icon: 'content_cut' },
+                { key: 'analytics' as const, label: 'Análises', icon: 'monitoring' },
                 { key: 'rules' as const, label: 'Regras', icon: 'tune' },
                 { key: 'connection' as const, label: 'Conexão', icon: 'qr_code_2' },
               ].map((item) => (
@@ -3578,6 +3602,15 @@ function AdminCommandCenter({ session }: { session: Session }) {
               </div>
             )}
 
+            {tab === 'analytics' && (
+              <AnalyticsPanel
+                range={analyticsRange}
+                onRange={setAnalyticsRange}
+                data={analytics}
+                loading={analyticsLoading}
+              />
+            )}
+
             {tab === 'rules' && (
               <form onSubmit={saveRules} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-4 max-w-md">
                 <h2 className="text-[15px] font-bold text-on-surface">Regras da barbearia</h2>
@@ -3643,6 +3676,91 @@ function downloadQr(canvasId: string, filename: string) {
   a.href = canvas.toDataURL('image/png')
   a.download = filename
   a.click()
+}
+
+// FEAT-081: painel de gráficos financeiros (recharts) com filtro temporal.
+function AnalyticsPanel({ range, onRange, data, loading }: {
+  range: AnalyticsRange
+  onRange: (r: AnalyticsRange) => void
+  data: AnalyticsData | null
+  loading: boolean
+}) {
+  const ranges: { key: AnalyticsRange; label: string }[] = [
+    { key: 'LAST_7_DAYS', label: '7 dias' },
+    { key: 'LAST_14_DAYS', label: '14 dias' },
+    { key: 'CURRENT_MONTH', label: 'Mês atual' },
+  ]
+  const brl = (v: number) => money.format(v)
+  // RF03: dias da semana ordenados do maior para o menor faturamento (barras horizontais).
+  const dowSorted = data ? [...data.dayOfWeekBreakdown].sort((a, b) => b.revenue - a.revenue) : []
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2">
+        {ranges.map((r) => (
+          <button
+            key={r.key}
+            onClick={() => onRange(r.key)}
+            className={`h-9 px-3 rounded-lg text-[12px] font-semibold border transition-colors ${range === r.key ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-lowest text-on-surface-variant border-on-surface/10 hover:text-on-surface'}`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      {loading && !data ? (
+        <div className="h-72 bg-surface-container-lowest rounded-xl animate-pulse" />
+      ) : !data ? (
+        <p className="text-[14px] text-on-surface-variant py-8 text-center">Sem dados para o período.</p>
+      ) : (
+        <>
+          {/* RF01: faturamento geral cronológico (linha) */}
+          <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+            <h2 className="text-[15px] font-bold text-on-surface mb-3">Faturamento geral</h2>
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={data.generalTimeline} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+                <XAxis dataKey="formattedDate" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value) => brl(Number(value))} />
+                <Line type="monotone" dataKey="revenue" name="Faturamento" stroke="#b8412f" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* RF02: faturamento por barbeiro (barras verticais) */}
+            <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+              <h2 className="text-[15px] font-bold text-on-surface mb-3">Por barbeiro</h2>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={data.barberBreakdown} margin={{ top: 8, right: 12, bottom: 4, left: -8 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+                  <XAxis dataKey="barberName" tick={{ fontSize: 11 }} interval={0} angle={-15} textAnchor="end" height={50} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(value) => brl(Number(value))} />
+                  <Bar dataKey="revenue" name="Faturamento" fill="#2f6fb8" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* RF03: faturamento por dia da semana (barras horizontais, maior→menor) */}
+            <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
+              <h2 className="text-[15px] font-bold text-on-surface mb-3">Por dia da semana</h2>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart layout="vertical" data={dowSorted} margin={{ top: 8, right: 12, bottom: 4, left: 24 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />
+                  <XAxis type="number" tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="dayName" tick={{ fontSize: 11 }} width={88} />
+                  <Tooltip formatter={(value) => brl(Number(value))} />
+                  <Bar dataKey="revenue" name="Faturamento" fill="#3f9d6a" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function AdminMetric({ icon, label, value, tone = 'normal' }: { icon: string; label: string; value: string; tone?: 'normal' | 'warn' }) {

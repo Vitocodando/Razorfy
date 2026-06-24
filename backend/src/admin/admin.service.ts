@@ -8,6 +8,7 @@ import * as auditSvc from '../audit/audit.service';
 import * as notifSvc from '../notification/notification.service';
 import * as settingsSvc from '../settings/settings.service';
 import { config } from '../config';
+import { publishDomainEvent } from '../events/eventBus';
 
 type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -224,7 +225,7 @@ export async function getCommissionSettlement(tenantId: string, from?: string, t
 }
 
 export async function applyNoShow(adminId: string, tenantId: string, appointmentId: string, reason?: string) {
-  return prisma.$transaction(async tx => {
+  const result = await prisma.$transaction(async tx => {
     const appt = await lockAppointmentForAdmin(tx, appointmentId);
     if (appt.tenantId !== tenantId) {
       throw new BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
@@ -281,6 +282,13 @@ export async function applyNoShow(adminId: string, tenantId: string, appointment
       },
     };
   });
+  // RN01: evento pós-commit (tenant do admin autenticado).
+  publishDomainEvent({
+    tenantId,
+    eventType: 'APPOINTMENT_NO_SHOW',
+    payload: { appointmentId: result.appointmentId, status: result.newStatus },
+  });
+  return result;
 }
 
 export async function listVacationBlocks(tenantId: string) {

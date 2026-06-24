@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isoWeekday = isoWeekday;
 exports.localDateString = localDateString;
 exports.dateOnlyUtc = dateOnlyUtc;
 exports.availableStarts = availableStarts;

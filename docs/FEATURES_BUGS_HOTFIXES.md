@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-22T20:00:00
+last_updated: 2026-06-23T01:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1111,6 +1111,42 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`
 
+### FEAT-080 - Motor event-driven para dashboard (future-proof)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `CLIENT` (dispara indireto), `ADMIN` (consome via React Query), `Event Bus` (interno)
+- `description`: Infraestrutura desacoplada — mudanças de estado de agendamento publicam Domain Events em um barramento interno em memória (Pub/Sub). Fase 1: front consome passivamente via React Query (window-focus refetch + polling). Fase 2 (futuro): basta um novo listener (WebSocket/SSE) assinar o bus, sem tocar nos serviços de negócio. **Não inclui** WebSocket físico nem mensageria externa (Kafka/RabbitMQ) na Fase 1.
+- `business_rules`: **RN01** — evento despachado SOMENTE após o commit (publish fora do `prisma.$transaction`, com o resultado já commitado). **RN02** — todo evento carrega `tenantId` (isolamento de broadcast futuro). **RN03** — front invalida só a query afetada (`['admin-dashboard']`), não a aplicação inteira. **V01/CT01** — listener com erro é isolado (cada handler em `Promise.resolve().catch`); nunca quebra a transação/venda. Publicação assíncrona (`setImmediate`) → não adiciona latência à requisição HTTP.
+- `backend`: `events/eventBus.ts` — `DomainEvent { eventId, tenantId, eventType, timestamp, payload }`, `publishDomainEvent()`, `onDomainEvent()` (handlers isolados), listener default de log (Fase 1). Eventos emitidos pós-commit em `appointment.service` (CREATED/CONFIRMED/CANCELED/CONCLUDED) e `admin.service` (NO_SHOW).
+- `frontend`: `@tanstack/react-query` — `QueryClientProvider` em `main.tsx` (`refetchOnWindowFocus`, `refetchOnReconnect`, `staleTime 60s`, `refetchInterval 120s`); `AdminCommandCenter` lê o dashboard/grid via `useQuery(['admin-dashboard', date])` (troca de data = refetch granular); ações que alteram o painel (no-show, resolver alerta) fazem `invalidateQueries(['admin-dashboard'])`.
+- `upgrade_path` (Fase 2): criar `RealTimeNotifierGateway` que faz `onDomainEvent` → empurra no socket filtrando por `tenantId`; front troca a invalidação por focus/polling por invalidação on-message. Zero alteração nos serviços de negócio.
+- `error_codes`: `EVENT_DISPATCH_FAILED` (não bloqueante, só log).
+- `api_compatibility`: `COMPATIBLE` (nenhum endpoint novo; só infraestrutura interna + libs de cache no front).
+- `depends_on`: `FEAT-073`
+- `acceptance`: evento só após commit, com `tenantId`; falha de listener não quebra agendamento (201 mantido); painel do admin refaz fetch em window-focus sem loading agressivo; troca de data refaz só a query do dashboard.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; CT01 (isolamento) — listener que lança `throw` não propaga em `publishDomainEvent`, demais listeners ainda recebem, evento traz `eventId`/`tenantId`/`timestamp`.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-081 - Motor de análise gráfica financeira (BFF Analytics)
+
+- `status`: `IMPLEMENTED`
+- `area`: `ADMIN`
+- `actors`: `ADMIN`
+- `description`: BFF de analytics — uma chamada retorna 3 datasets para os gráficos: faturamento geral cronológico (linha), por barbeiro (barras) e por dia da semana (barras horizontais). Filtros temporais `LAST_7_DAYS` (padrão), `LAST_14_DAYS`, `CURRENT_MONTH`. Descritivo de dados históricos reais; sem projeções/IA, sem fluxo de caixa líquido.
+- `business_rules`: **RN01** — faturamento = soma de `amount_paid` apenas de agendamentos `CONCLUDED` (cancelados/no-show/pendentes ignorados). **RN02** — gap filling: todo dia do intervalo tem um nó (`0.00` se vazio). **RN03** — `CURRENT_MONTH` = dia 1 do mês corrente até hoje (fuso do negócio). **RN04** — barbeiro inativo com histórico aparece como `Nome (Inativo)`. **V01** — `range` fora do enum → `400 INVALID_ANALYTICS_RANGE`. **V02** — `dayOfWeekBreakdown` sempre com 7 itens ordenados 1..7. **NFR** — agrupamento por dia da semana via ISO weekday (Seg=1..Dom=7).
+- `api`: `GET /api/v1/admin/analytics?range=` (autenticado + `requireStrictAdmin`, tenant do JWT). Resposta `{ range, generalTimeline[], barberBreakdown[], dayOfWeekBreakdown[] }`. (Nota: usa tenant do JWT como os demais endpoints admin, em vez de `:tenantId` no path; mantém o contrato dos datasets.)
+- `backend`: `admin/analytics.service.ts` — `buildDays` (gap-fill no fuso `BUSINESS_TIMEZONE`), agregação em memória por dia/barbeiro/ISODOW; `isoWeekday`/`localDayRangeUtc`/`localDateString` reusados de `availability.service`.
+- `frontend`: `recharts` — aba **Análises** no `AdminCommandCenter` com seletor de período (7/14/mês) e 3 gráficos (`LineChart`/`BarChart`/`BarChart` horizontal). Via `useQuery(['admin-analytics', range])` → revalidação passiva (FEAT-080); dias da semana ordenados maior→menor na renderização (RF03).
+- `cache_future`: pronto para cache curto invalidado por `AppointmentConcludedEvent` (FEAT-080) numa fase futura.
+- `api_compatibility`: `COMPATIBLE` (endpoint novo).
+- `depends_on`: `FEAT-073`, `FEAT-080`
+- `acceptance`: 7/14 dias → timeline com exatamente 7/14 nós; mês atual a partir do dia 1; gap-fill com `0.00`; só `CONCLUDED` computa; dia da semana acumula por ISODOW; inativo com `(Inativo)`; range inválido → 400; não-admin → 403.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — LAST_7_DAYS=7, LAST_14_DAYS=14 (CT01), CURRENT_MONTH=24 (01→24/jun), dow sempre 7 e agrupado por ISODOW (CT02: terça acumula), barbeiros agregados e ordenados desc, `LAST_YEAR`→`400 INVALID_ANALYTICS_RANGE`, cliente→`403`.
+- `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
 ## 4. Regras de negócio rastreadas
 
 | ID | Regra | Features |
@@ -1171,6 +1207,14 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 | `RN-054` | Conta verificada por telefone é meio de auth válido (e-mail opcional) | `FEAT-077` |
 | `RN-055` | Login/registro por senha aceitam identifier = e-mail OU telefone (E.164) | `FEAT-078` |
 | `RN-056` | Web e app têm paridade de autenticação (inclui login por telefone/OTP) | `FEAT-078` |
+| `RN-057` | Domain event despachado só após commit da transação | `FEAT-080` |
+| `RN-058` | Todo domain event carrega `tenantId` (isolamento de broadcast) | `FEAT-080` |
+| `RN-059` | Falha em listener de evento nunca quebra a transação principal (isolada) | `FEAT-080` |
+| `RN-060` | Front invalida apenas a query afetada (revalidação granular) | `FEAT-080` |
+| `RN-061` | Analytics: faturamento só de `CONCLUDED` (soma `amount_paid`) | `FEAT-081` |
+| `RN-062` | Analytics: gap filling — todo dia do intervalo tem nó (0.00 se vazio) | `FEAT-081` |
+| `RN-063` | Analytics: `dayOfWeekBreakdown` sempre 7 itens (ISODOW Seg=1..Dom=7) | `FEAT-081` |
+| `RN-064` | Analytics: barbeiro inativo com histórico aparece como `Nome (Inativo)` | `FEAT-081` |
 
 ## 5. Registro de bugs
 

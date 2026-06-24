@@ -63,7 +63,7 @@ function getLocalMinutes(date: Date, tz: string): number {
   return h * 60 + m;
 }
 
-function isoWeekday(dateStr: string): number {
+export function isoWeekday(dateStr: string): number {
   // ISO: Mon=1 ... Sun=7
   const d = new Date(dateStr + 'T12:00:00Z');
   const jsDay = d.getUTCDay(); // 0=Sun

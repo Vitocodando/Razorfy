@@ -9,6 +9,7 @@ import * as auditSvc from '../audit/audit.service';
 import * as notifSvc from '../notification/notification.service';
 import { createIntent, refund as gatewayRefund } from '../payment/mockGateway';
 import { calculateEnd, canCancel } from './appointment.policy';
+import { publishDomainEvent } from '../events/eventBus';
 
 const BLOCKING_STATUSES = ['PENDING_PAYMENT', 'CONFIRMED'];
 
@@ -65,7 +66,7 @@ export async function createAppointment(clientId: string, body: {
     );
   }
 
-  return prisma.$transaction(async tx => {
+  const result = await prisma.$transaction(async tx => {
     const client = await tx.user.findUnique({ where: { id: clientId } });
     if (!client) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
     if (client.role !== 'CLIENT') {
@@ -209,10 +210,17 @@ export async function createAppointment(clientId: string, body: {
 
     return { appointment, paymentPayload };
   });
+  // RN01: evento despachado SOMENTE após o commit da transação.
+  publishDomainEvent({
+    tenantId: result.appointment.tenantId,
+    eventType: 'APPOINTMENT_CREATED',
+    payload: { appointmentId: result.appointment.id, status: result.appointment.status },
+  });
+  return result;
 }
 
 export async function confirmPayment(appointmentId: string, paymentReference: string) {
-  return prisma.$transaction(async tx => {
+  const result = await prisma.$transaction(async tx => {
     const appt = await lockAppointment(tx, appointmentId);
     if (appt.status === 'CONFIRMED') return appt;
     if (appt.status !== 'PENDING_PAYMENT') {
@@ -256,10 +264,16 @@ export async function confirmPayment(appointmentId: string, paymentReference: st
 
     return updated;
   });
+  publishDomainEvent({
+    tenantId: result.tenantId,
+    eventType: 'APPOINTMENT_CONFIRMED',
+    payload: { appointmentId: result.id, status: result.status },
+  });
+  return result;
 }
 
 export async function cancelAppointment(appointmentId: string, actorId: string) {
-  return prisma.$transaction(async tx => {
+  const result = await prisma.$transaction(async tx => {
     const appt = await lockAppointment(tx, appointmentId);
     const actor = await tx.user.findUnique({ where: { id: actorId } });
     if (!actor) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
@@ -298,10 +312,16 @@ export async function cancelAppointment(appointmentId: string, actorId: string) 
 
     return updated;
   });
+  publishDomainEvent({
+    tenantId: result.tenantId,
+    eventType: 'APPOINTMENT_CANCELED',
+    payload: { appointmentId: result.id, status: result.status },
+  });
+  return result;
 }
 
 export async function concludeAppointment(appointmentId: string, actorId: string) {
-  return prisma.$transaction(async tx => {
+  const result = await prisma.$transaction(async tx => {
     const appt = await lockAppointment(tx, appointmentId);
     const actor = await tx.user.findUnique({ where: { id: actorId } });
     if (!actor) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
@@ -332,6 +352,12 @@ export async function concludeAppointment(appointmentId: string, actorId: string
 
     return updated;
   });
+  publishDomainEvent({
+    tenantId: result.tenantId,
+    eventType: 'APPOINTMENT_CONCLUDED',
+    payload: { appointmentId: result.id, status: result.status },
+  });
+  return result;
 }
 
 export async function expirePaymentHold(appointmentId: string) {

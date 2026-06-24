@@ -8,6 +8,7 @@ const asyncHandler_1 = require("../common/asyncHandler");
 const admin_middleware_1 = require("./admin.middleware");
 const admin_schemas_1 = require("./admin.schemas");
 const admin_service_1 = require("./admin.service");
+const analytics_service_1 = require("./analytics.service");
 exports.adminRouter = (0, express_1.Router)();
 exports.adminRouter.use(authenticate_1.authenticate, admin_middleware_1.requireStrictAdmin);
 const UuidParam = zod_1.z.string().uuid();
@@ -119,6 +120,11 @@ exports.adminRouter.delete('/services/:id', (0, asyncHandler_1.asyncHandler)(asy
 // Barbearia do admin (código de conexão / QR)
 exports.adminRouter.get('/barbershop', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     res.json(await (0, admin_service_1.getMyBarbershop)(T(req)));
+}));
+// FEAT-081: BFF de analytics financeiro (3 datasets para os gráficos).
+exports.adminRouter.get('/analytics', (0, asyncHandler_1.asyncHandler)(async (req, res) => {
+    const range = typeof req.query.range === 'string' ? req.query.range : 'LAST_7_DAYS';
+    res.json(await (0, analytics_service_1.getAnalytics)(T(req), range));
 }));
 // Configurações globais (RF04) — cache invalidado no PUT
 exports.adminRouter.get('/global-settings', (0, asyncHandler_1.asyncHandler)(async (req, res) => {

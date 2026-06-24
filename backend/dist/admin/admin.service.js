@@ -75,6 +75,7 @@ const auditSvc = __importStar(require("../audit/audit.service"));
 const notifSvc = __importStar(require("../notification/notification.service"));
 const settingsSvc = __importStar(require("../settings/settings.service"));
 const config_1 = require("../config");
+const eventBus_1 = require("../events/eventBus");
 // RF04: barbearia do admin (código de conexão para QR/compartilhamento).
 async function getMyBarbershop(tenantId) {
     const shop = await prisma_1.prisma.barbershop.findUnique({
@@ -238,7 +239,7 @@ async function getCommissionSettlement(tenantId, from, to) {
     };
 }
 async function applyNoShow(adminId, tenantId, appointmentId, reason) {
-    return prisma_1.prisma.$transaction(async (tx) => {
+    const result = await prisma_1.prisma.$transaction(async (tx) => {
         const appt = await lockAppointmentForAdmin(tx, appointmentId);
         if (appt.tenantId !== tenantId) {
             throw new BusinessError_1.BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
@@ -283,6 +284,13 @@ async function applyNoShow(adminId, tenantId, appointmentId, reason) {
             },
         };
     });
+    // RN01: evento pós-commit (tenant do admin autenticado).
+    (0, eventBus_1.publishDomainEvent)({
+        tenantId,
+        eventType: 'APPOINTMENT_NO_SHOW',
+        payload: { appointmentId: result.appointmentId, status: result.newStatus },
+    });
+    return result;
 }
 async function listVacationBlocks(tenantId) {
     return prisma_1.prisma.vacationBlock.findMany({

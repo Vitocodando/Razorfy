@@ -4,8 +4,10 @@
 *.iml
 *.log
 
+# Dependências e artefatos de build (gerados no deploy)
+node_modules/
 backend/target/
-frontend/node_modules/
+backend/dist/
 frontend/dist/
 
 *.zip

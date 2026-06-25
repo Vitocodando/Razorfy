@@ -15,10 +15,10 @@ export const CouponSchema = z.object({
   }
 });
 
-export const CommissionSchema = z.object({
-  barberId: z.string().uuid(),
-  serviceId: z.string().uuid(),
-  commissionPct: z.number().min(0).max(100),
+// FEAT-082: upload de ícone SVG customizado.
+export const IconSchema = z.object({
+  name: z.string().trim().min(1).max(50),
+  svgContent: z.string().min(1),
 });
 
 export const VacationBlockSchema = z.object({
@@ -48,6 +48,7 @@ export const CreateServiceSchema = z.object({
   name: z.string().trim().min(1).max(50),
   durationMinutes: z.number().int().positive(),
   price: z.number().min(0),
+  iconId: z.string().uuid().optional(),
 });
 
 export const GlobalSettingsSchema = z.object({
@@ -59,7 +60,3 @@ export const DateQuerySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
-export const RangeQuerySchema = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-});

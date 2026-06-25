@@ -33,7 +33,6 @@ model User {
   appointmentStatusHistoryActs AppointmentStatusHistory[]
   scheduleBlocks               ScheduleBlock[]
   vacationBlocks               VacationBlock[]
-  barberCommissions            BarberCommission[]
   reviewsAsBarber              Review[]                   @relation("BarberReviews")
   reviewsAsClient              Review[]                   @relation("ClientReviews")
   barberGoals                  BarberGoal[]
@@ -95,10 +94,26 @@ model Service {
   active          Boolean @default(true)
 
   appointmentServices AppointmentService[]
-  barberCommissions   BarberCommission[]
+
+  iconId String?      @map("icon_id") @db.Uuid
+  icon   ServiceIcon? @relation(fields: [iconId], references: [id])
 
   tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("services")
+}
+
+model ServiceIcon {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // tenant_id NULO = ícone global (plataforma); preenchido = privado da barbearia (RN01).
+  tenantId   String?  @map("tenant_id") @db.Uuid
+  name       String   @db.VarChar(50)
+  svgContent String   @map("svg_content") @db.Text
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  services Service[]
+
+  @@index([tenantId])
+  @@map("service_icons")
 }
 
 model Appointment {
@@ -202,22 +217,6 @@ model Coupon {
   @@map("coupons")
 }
 
-model BarberCommission {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  barberId      String   @map("barber_id") @db.Uuid
-  serviceId     String   @map("service_id") @db.Uuid
-  commissionPct Decimal  @map("commission_pct") @db.Decimal(5, 2)
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
-
-  barber  User    @relation(fields: [barberId], references: [id])
-  service Service @relation(fields: [serviceId], references: [id])
-
-  @@unique([barberId, serviceId])
-  @@index([barberId])
-  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
-  @@map("barber_commissions")
-}
 
 model VacationBlock {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid

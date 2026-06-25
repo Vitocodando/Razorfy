@@ -25,7 +25,8 @@ async function connectByCode(code: string): Promise<Barbershop> {
   const r = await request<ConnectResult>(`/tenants/connect/${encodeURIComponent(code)}`)
   return { id: r.tenantId, name: r.name, slug: r.slug, connectionCode: r.connectionCode, logoUrl: r.logoUrl }
 }
-type ServiceItem = { id: string; name: string; durationMinutes: number; price: number }
+type ServiceItem = { id: string; name: string; durationMinutes: number; price: number; iconId?: string | null }
+type ServiceIconItem = { id: string; name: string; type: 'GLOBAL' | 'CUSTOM'; svgContent: string }
 type Barber = { id: string; name: string }
 type Appointment = {
   appointmentId: string
@@ -98,14 +99,6 @@ type CouponItem = {
   currentUses: number
   expiresAt: string
 }
-type CommissionRule = {
-  id: string
-  barberId: string
-  serviceId: string
-  commissionPct: number
-  barber?: Barber
-  service?: ServiceItem
-}
 type VacationBlock = {
   id: string
   barberId: string
@@ -156,25 +149,6 @@ type AdminDashboard = {
   report: DailyAdminReport
   alerts: AdminAlert[]
   grid: AdminGrid
-}
-type CommissionSettlement = {
-  from: string
-  to: string
-  barbers: {
-    barberId: string
-    barberName: string
-    netRevenue: number
-    commissionTotal: number
-    services: {
-      appointmentId: string
-      serviceId: string
-      serviceName: string
-      netAmount: number
-      commissionPct: number
-      commissionAmount: number
-    }[]
-  }[]
-  totals: { netRevenue: number; commissionTotal: number }
 }
 type ApiError = { message?: string }
 
@@ -230,6 +204,12 @@ function CategoryIcon({ category, className }: { category: Category; className?:
     )
   }
   return <Icon name={CATEGORY_META[category].icon} className={className} />
+}
+
+// FEAT-082: renderiza SVG de ícone de serviço. O conteúdo já foi sanitizado no backend
+// (anti-XSS), por isso o dangerouslySetInnerHTML é seguro e justificado aqui.
+function SafeSvg({ svg, className }: { svg: string; className?: string }) {
+  return <span className={className} aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
@@ -1404,6 +1384,7 @@ function HomePage({
   onLogout: () => void
 }) {
   const [services, setServices] = useState<ServiceItem[]>([])
+  const [iconMap, setIconMap] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
 
@@ -1413,6 +1394,12 @@ function HomePage({
       .then(setServices)
       .catch((cause) => setError(cause.message))
       .finally(() => setLoading(false))
+    // FEAT-082: ícones por serviço (globais + da barbearia)
+    if (tenantId) {
+      request<ServiceIconItem[]>(`/tenants/${tenantId}/icons`)
+        .then((list) => setIconMap(Object.fromEntries(list.map((i) => [i.id, i.svgContent]))))
+        .catch(() => { /* ícones são opcionais */ })
+    }
   }, [])
 
   const availableCategories = CATEGORIES.filter((c) => services.some((s) => categoryOf(s) === c))
@@ -1467,7 +1454,12 @@ function HomePage({
                         }`}
                       >
                         <div className="flex justify-between items-start mb-2">
-                          <h3 className="text-[20px] font-semibold text-on-surface leading-tight">{service.name}</h3>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {service.iconId && iconMap[service.iconId] && (
+                              <SafeSvg svg={iconMap[service.iconId]} className="[&>svg]:w-7 [&>svg]:h-7 text-primary shrink-0" />
+                            )}
+                            <h3 className="text-[20px] font-semibold text-on-surface leading-tight">{service.name}</h3>
+                          </div>
                           <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
                             selected ? 'border-primary bg-primary' : 'border-on-surface/20 group-hover:border-primary'
                           }`}>
@@ -2633,7 +2625,7 @@ function ClientNotesModal({
 
 // ---------- Centro de Comando (ADMIN) ----------
 
-type AdminTab = 'overview' | 'coupons' | 'commissions' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection' | 'analytics'
+type AdminTab = 'overview' | 'coupons' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection' | 'analytics'
 
 type AnalyticsRange = 'LAST_7_DAYS' | 'LAST_14_DAYS' | 'CURRENT_MONTH'
 type AnalyticsData = {
@@ -2658,6 +2650,7 @@ type AdminServiceRow = {
   price: number
   durationMinutes: number
   isActive: boolean
+  iconId?: string | null
   totalAppointments: number
 }
 
@@ -2944,14 +2937,11 @@ function AdminCommandCenter({ session }: { session: Session }) {
     queryFn: () => request<AnalyticsData>(`/admin/analytics?range=${analyticsRange}`, {}, token),
   })
   const [barbers, setBarbers] = useState<Barber[]>([])
-  const [services, setServices] = useState<ServiceItem[]>([])
   const [coupons, setCoupons] = useState<CouponItem[]>([])
-  const [commissions, setCommissions] = useState<CommissionRule[]>([])
   const [vacations, setVacations] = useState<VacationBlock[]>([])
   const [adminBarbers, setAdminBarbers] = useState<AdminBarberRow[]>([])
   const [adminServices, setAdminServices] = useState<AdminServiceRow[]>([])
   const [rulesForm, setRulesForm] = useState<GlobalSettingsData>({ noShowToleranceMinutes: 15, defaultCashbackPct: 10 })
-  const [settlement, setSettlement] = useState<CommissionSettlement | null>(null)
   const [shop, setShop] = useState<{ id: string; name: string; slug: string; connectionCode: string; logoUrl: string | null } | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -2964,40 +2954,31 @@ function AdminCommandCenter({ session }: { session: Session }) {
     maxUsesGlobal: '',
     expiresAt: dateTimeLocalInDays(30),
   })
-  const [commissionForm, setCommissionForm] = useState({ barberId: '', serviceId: '', commissionPct: '50' })
   const [vacationForm, setVacationForm] = useState({ barberId: '', startDate: tomorrow(), endDate: tomorrow() })
   const [barberForm, setBarberForm] = useState({ name: '', email: '', phone: '', initialPassword: '' })
-  const [serviceForm, setServiceForm] = useState({ name: '', durationMinutes: '30', price: '35' })
+  const [serviceForm, setServiceForm] = useState({ name: '', durationMinutes: '30', price: '35', iconId: '' })
+  const [icons, setIcons] = useState<ServiceIconItem[]>([])
 
-  async function loadAll(nextDate = date) {
+  async function loadAll() {
     setLoading(true)
     setError('')
     try {
-      const [barberList, serviceList, couponList, commissionList, vacationList, settlementData, adminBarberList, adminServiceList, settingsData] = await Promise.all([
+      const [barberList, couponList, vacationList, adminBarberList, adminServiceList, settingsData, iconList] = await Promise.all([
         request<Barber[]>('/barbers'),
-        request<ServiceItem[]>('/services'),
         request<CouponItem[]>('/admin/coupons', {}, token),
-        request<CommissionRule[]>('/admin/commissions', {}, token),
         request<VacationBlock[]>('/admin/vacation-blocks', {}, token),
-        request<CommissionSettlement>(`/admin/commissions/settlement?from=${nextDate}&to=${nextDate}`, {}, token),
         request<AdminBarberRow[]>('/admin/barbers', {}, token),
         request<AdminServiceRow[]>('/admin/services', {}, token),
         request<GlobalSettingsData>('/admin/global-settings', {}, token),
+        request<ServiceIconItem[]>('/admin/icons', {}, token),
       ])
       setBarbers(barberList)
-      setServices(serviceList)
       setCoupons(couponList)
-      setCommissions(commissionList)
       setVacations(vacationList)
-      setSettlement(settlementData)
       setAdminBarbers(adminBarberList)
       setAdminServices(adminServiceList)
       setRulesForm({ noShowToleranceMinutes: settingsData.noShowToleranceMinutes, defaultCashbackPct: Number(settingsData.defaultCashbackPct) })
-      setCommissionForm((prev) => ({
-        ...prev,
-        barberId: prev.barberId || barberList[0]?.id || '',
-        serviceId: prev.serviceId || serviceList[0]?.id || '',
-      }))
+      setIcons(iconList)
       setVacationForm((prev) => ({ ...prev, barberId: prev.barberId || barberList[0]?.id || '' }))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível carregar o painel administrativo.')
@@ -3024,7 +3005,6 @@ function AdminCommandCenter({ session }: { session: Session }) {
 
   async function reloadDate(nextDate: string) {
     setDate(nextDate)
-    await loadAll(nextDate)
   }
 
   async function createCouponSubmit(event: FormEvent) {
@@ -3151,13 +3131,37 @@ function AdminCommandCenter({ session }: { session: Session }) {
           name: serviceForm.name.trim(),
           durationMinutes: Number(serviceForm.durationMinutes),
           price: Number(serviceForm.price),
+          ...(serviceForm.iconId ? { iconId: serviceForm.iconId } : {}),
         }),
       }, token)
       setSuccess(`Serviço ${r.name} criado.`)
-      setServiceForm({ name: '', durationMinutes: '30', price: '35' })
+      setServiceForm({ name: '', durationMinutes: '30', price: '35', iconId: '' })
       await loadAll()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível criar o serviço.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // FEAT-082: upload de SVG customizado (lê o arquivo como texto e envia).
+  async function uploadIcon(file: File) {
+    if (file.type !== 'image/svg+xml' && !file.name.toLowerCase().endsWith('.svg')) {
+      setError('Envie um arquivo .svg.'); return
+    }
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const svgContent = await file.text()
+      const r = await request<{ id: string; message: string }>('/admin/icons', {
+        method: 'POST',
+        body: JSON.stringify({ name: file.name.replace(/\.svg$/i, '').slice(0, 50) || 'Ícone', svgContent }),
+      }, token)
+      const list = await request<ServiceIconItem[]>('/admin/icons', {}, token)
+      setIcons(list)
+      setServiceForm((p) => ({ ...p, iconId: r.id }))
+      setSuccess(r.message)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível enviar o ícone.')
     } finally {
       setSaving(false)
     }
@@ -3184,27 +3188,6 @@ function AdminCommandCenter({ session }: { session: Session }) {
       await loadAll()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível excluir o serviço.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function saveCommission(event: FormEvent) {
-    event.preventDefault()
-    setSaving(true); setError(''); setSuccess('')
-    try {
-      await request<CommissionRule>('/admin/commissions', {
-        method: 'PUT',
-        body: JSON.stringify({
-          barberId: commissionForm.barberId,
-          serviceId: commissionForm.serviceId,
-          commissionPct: Number(commissionForm.commissionPct),
-        }),
-      }, token)
-      setSuccess('Comissão salva.')
-      await loadAll()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Não foi possível salvar a comissão.')
     } finally {
       setSaving(false)
     }
@@ -3360,7 +3343,6 @@ function AdminCommandCenter({ session }: { session: Session }) {
               {[
                 { key: 'overview' as const, label: 'Grid', icon: 'view_timeline' },
                 { key: 'coupons' as const, label: 'Cupons', icon: 'sell' },
-                { key: 'commissions' as const, label: 'Repasses', icon: 'percent' },
                 { key: 'vacations' as const, label: 'Férias', icon: 'beach_access' },
                 { key: 'barbers' as const, label: 'Barbeiros', icon: 'group' },
                 { key: 'services' as const, label: 'Serviços', icon: 'content_cut' },
@@ -3471,45 +3453,6 @@ function AdminCommandCenter({ session }: { session: Session }) {
               </div>
             )}
 
-            {tab === 'commissions' && (
-              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
-                <form onSubmit={saveCommission} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
-                  <h2 className="text-[15px] font-bold text-on-surface">Regra de repasse</h2>
-                  <select value={commissionForm.barberId} onChange={(e) => setCommissionForm((p) => ({ ...p, barberId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
-                    {barbers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                  <select value={commissionForm.serviceId} onChange={(e) => setCommissionForm((p) => ({ ...p, serviceId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
-                    {services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                  <input type="number" min="0" max="100" step="0.01" value={commissionForm.commissionPct} onChange={(e) => setCommissionForm((p) => ({ ...p, commissionPct: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
-                  <button disabled={saving || !commissionForm.barberId || !commissionForm.serviceId} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Salvar</button>
-                </form>
-                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="text-[15px] font-bold text-on-surface">Acerto do dia</h2>
-                    <span className="text-[13px] font-bold text-primary">{money.format(settlement?.totals.commissionTotal ?? 0)}</span>
-                  </div>
-                  <div className="flex flex-col gap-3">
-                    {settlement?.barbers.map((barber) => (
-                      <div key={barber.barberId} className="border border-on-surface/10 rounded-lg p-3">
-                        <div className="flex justify-between gap-2">
-                          <p className="text-[13px] font-bold text-on-surface">{barber.barberName}</p>
-                          <p className="text-[13px] font-bold text-on-surface">{money.format(barber.commissionTotal)}</p>
-                        </div>
-                        <p className="text-[11px] text-on-surface-variant">Base líquida {money.format(barber.netRevenue)}</p>
-                      </div>
-                    ))}
-                    {commissions.map((rule) => (
-                      <p key={rule.id} className="text-[12px] text-on-surface-variant flex justify-between gap-2 py-1 border-t border-on-surface/10 first:border-t-0">
-                        <span>{rule.barber?.name} · {rule.service?.name}</span>
-                        <span className="font-semibold">{rule.commissionPct}%</span>
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
             {tab === 'vacations' && (
               <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
                 <form onSubmit={createVacation} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3">
@@ -3590,6 +3533,30 @@ function AdminCommandCenter({ session }: { session: Session }) {
                   <label className="text-[12px] text-on-surface-variant">Preço (R$)
                     <input required type="number" min="0" step="0.01" value={serviceForm.price} onChange={(e) => setServiceForm((p) => ({ ...p, price: e.target.value }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
                   </label>
+
+                  {/* FEAT-082: galeria de ícones + upload de SVG */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-on-surface-variant">Ícone</span>
+                    <label className="text-[11px] font-semibold text-secondary cursor-pointer hover:text-primary">
+                      Enviar SVG
+                      <input type="file" accept=".svg,image/svg+xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadIcon(f); e.target.value = '' }} />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-6 gap-2">
+                    {icons.map((ic) => (
+                      <button
+                        key={ic.id}
+                        type="button"
+                        title={ic.name}
+                        onClick={() => setServiceForm((p) => ({ ...p, iconId: p.iconId === ic.id ? '' : ic.id }))}
+                        className={`aspect-square rounded-lg border flex items-center justify-center p-1.5 transition-colors ${serviceForm.iconId === ic.id ? 'border-primary bg-primary/10 text-primary' : 'border-on-surface/15 text-on-surface-variant hover:border-on-surface/40'}`}
+                      >
+                        <SafeSvg svg={ic.svgContent} className="[&>svg]:w-full [&>svg]:h-full block w-full h-full" />
+                      </button>
+                    ))}
+                  </div>
+                  {icons.length > 0 && <p className="text-[10px] text-on-surface-variant">Dica: SVGs com <code>fill=&quot;currentColor&quot;</code> herdam a cor do tema (claro/escuro).</p>}
+
                   <button disabled={saving} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Cadastrar</button>
                 </form>
                 <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
@@ -3597,7 +3564,9 @@ function AdminCommandCenter({ session }: { session: Session }) {
                     <p className="p-4 text-[13px] text-on-surface-variant">Nenhum serviço cadastrado.</p>
                   ) : adminServices.map((s) => (
                     <div key={s.serviceId} className="p-4 border-b last:border-b-0 border-on-surface/10 flex items-center justify-between gap-3">
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex items-center gap-3">
+                        {(() => { const ic = icons.find((i) => i.id === s.iconId); return ic ? <SafeSvg svg={ic.svgContent} className="[&>svg]:w-6 [&>svg]:h-6 text-primary shrink-0" /> : null })()}
+                        <div className="min-w-0">
                         <p className="text-[14px] font-bold text-on-surface flex items-center gap-2">
                           {s.name}
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${s.isActive ? 'bg-green-100 text-green-800' : 'bg-surface-container-high text-on-surface-variant'}`}>
@@ -3605,6 +3574,7 @@ function AdminCommandCenter({ session }: { session: Session }) {
                           </span>
                         </p>
                         <p className="text-[12px] text-on-surface-variant truncate">{money.format(s.price)} · {s.durationMinutes} min · {s.totalAppointments} agendamentos</p>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button

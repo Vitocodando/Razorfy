@@ -20,12 +20,6 @@ type CouponInput = {
   expiresAt: string;
 };
 
-type CommissionInput = {
-  barberId: string;
-  serviceId: string;
-  commissionPct: number;
-};
-
 type VacationInput = {
   barberId: string;
   startDate: string;
@@ -93,135 +87,6 @@ export async function deleteCoupon(tenantId: string, id: string) {
   const current = await prisma.coupon.findUnique({ where: { id } });
   if (!current || current.tenantId !== tenantId) throw new BusinessError('COUPON_NOT_FOUND', 'Cupom não encontrado.', 404);
   await prisma.coupon.delete({ where: { id } });
-}
-
-export async function listCommissions(tenantId: string) {
-  return prisma.barberCommission.findMany({
-    where: { tenantId },
-    include: {
-      barber: { select: { id: true, name: true } },
-      service: { select: { id: true, name: true, price: true } },
-    },
-    orderBy: [{ barber: { name: 'asc' } }, { service: { name: 'asc' } }],
-  });
-}
-
-export async function upsertCommission(adminId: string, tenantId: string, data: CommissionInput) {
-  return prisma.$transaction(async tx => {
-    await assertBarberAndService(tx, data.barberId, data.serviceId, tenantId);
-
-    const previous = await tx.barberCommission.findUnique({
-      where: { barberId_serviceId: { barberId: data.barberId, serviceId: data.serviceId } },
-    });
-
-    const commission = await tx.barberCommission.upsert({
-      where: { barberId_serviceId: { barberId: data.barberId, serviceId: data.serviceId } },
-      update: { commissionPct: new Prisma.Decimal(data.commissionPct) },
-      create: {
-        tenantId,
-        barberId: data.barberId,
-        serviceId: data.serviceId,
-        commissionPct: new Prisma.Decimal(data.commissionPct),
-      },
-    });
-
-    adminAuditLog(adminId, 'UPSERT_BARBER_COMMISSION', previous, commission);
-    return commission;
-  });
-}
-
-export async function deleteCommission(adminId: string, tenantId: string, id: string) {
-  const previous = await prisma.barberCommission.findUnique({ where: { id } });
-  if (!previous || previous.tenantId !== tenantId) throw new BusinessError('COMMISSION_NOT_FOUND', 'Regra de comissão não encontrada.', 404);
-  await prisma.barberCommission.delete({ where: { id } });
-  adminAuditLog(adminId, 'DELETE_BARBER_COMMISSION', previous, null);
-}
-
-export async function getCommissionSettlement(tenantId: string, from?: string, to?: string) {
-  const today = localDateString();
-  const rangeFrom = from ?? today;
-  const rangeTo = to ?? rangeFrom;
-  if (rangeTo < rangeFrom) {
-    throw new BusinessError('INVALID_DATE_RANGE', 'A data final deve ser maior ou igual à inicial.', 400);
-  }
-
-  const { dayStartUtc } = localDayRangeUtc(rangeFrom);
-  const { dayEndUtc } = localDayRangeUtc(rangeTo);
-  const appointments = await prisma.appointment.findMany({
-    where: {
-      tenantId,
-      status: 'CONCLUDED',
-      startTimestamp: { gte: dayStartUtc, lt: dayEndUtc },
-    },
-    include: {
-      barber: { select: { id: true, name: true } },
-      services: true,
-    },
-    orderBy: { startTimestamp: 'asc' },
-  });
-
-  const commissions = await prisma.barberCommission.findMany({ where: { tenantId } });
-  const commissionByKey = new Map(commissions.map(c => [`${c.barberId}:${c.serviceId}`, c.commissionPct]));
-  const byBarber = new Map<string, {
-    barberId: string;
-    barberName: string;
-    netRevenue: Prisma.Decimal;
-    commissionTotal: Prisma.Decimal;
-    services: Array<{
-      appointmentId: string;
-      serviceId: string;
-      serviceName: string;
-      netAmount: Prisma.Decimal;
-      commissionPct: Prisma.Decimal;
-      commissionAmount: Prisma.Decimal;
-    }>;
-  }>();
-
-  for (const appt of appointments) {
-    const ratio = appt.totalPrice.greaterThan(0)
-      ? appt.amountPaid.div(appt.totalPrice)
-      : new Prisma.Decimal(0);
-    const row = byBarber.get(appt.barberId) ?? {
-      barberId: appt.barberId,
-      barberName: appt.barber.name,
-      netRevenue: new Prisma.Decimal(0),
-      commissionTotal: new Prisma.Decimal(0),
-      services: [],
-    };
-
-    for (const service of appt.services) {
-      const netAmount = service.price.mul(ratio).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-      const commissionPct = commissionByKey.get(`${appt.barberId}:${service.serviceId}`) ?? new Prisma.Decimal(0);
-      const commissionAmount = netAmount.mul(commissionPct).div(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-      row.netRevenue = row.netRevenue.plus(netAmount);
-      row.commissionTotal = row.commissionTotal.plus(commissionAmount);
-      row.services.push({
-        appointmentId: appt.id,
-        serviceId: service.serviceId,
-        serviceName: service.serviceName,
-        netAmount,
-        commissionPct,
-        commissionAmount,
-      });
-    }
-    byBarber.set(appt.barberId, row);
-  }
-
-  const barbers = [...byBarber.values()].map(row => ({
-    ...row,
-    netRevenue: row.netRevenue.toDecimalPlaces(2),
-    commissionTotal: row.commissionTotal.toDecimalPlaces(2),
-  }));
-
-  return {
-    from: rangeFrom,
-    to: rangeTo,
-    barbers,
-    totals: {
-      netRevenue: barbers.reduce((acc, b) => acc.plus(b.netRevenue), new Prisma.Decimal(0)).toDecimalPlaces(2),
-      commissionTotal: barbers.reduce((acc, b) => acc.plus(b.commissionTotal), new Prisma.Decimal(0)).toDecimalPlaces(2),
-    },
-  };
 }
 
 export async function applyNoShow(adminId: string, tenantId: string, appointmentId: string, reason?: string) {
@@ -586,19 +451,6 @@ export async function runWinBackCampaign(tenantId: string, referenceDate = local
   return metrics;
 }
 
-async function assertBarberAndService(tx: TxClient, barberId: string, serviceId: string, tenantId: string) {
-  const [barber, service] = await Promise.all([
-    tx.user.findUnique({ where: { id: barberId }, select: { role: true, tenantId: true } }),
-    tx.service.findUnique({ where: { id: serviceId }, select: { id: true, tenantId: true } }),
-  ]);
-  if (!barber || barber.role !== 'BARBER' || barber.tenantId !== tenantId) {
-    throw new BusinessError('BARBER_NOT_FOUND', 'Profissional não encontrado.', 404);
-  }
-  if (!service || service.tenantId !== tenantId) {
-    throw new BusinessError('SERVICE_NOT_FOUND', 'Serviço não encontrado.', 404);
-  }
-}
-
 async function lockAppointmentForAdmin(tx: TxClient, id: string) {
   const rows = await (tx as typeof prisma).$queryRaw<Array<{ id: string }>>`
     SELECT id FROM appointments WHERE id = ${id}::uuid FOR UPDATE
@@ -751,6 +603,7 @@ export async function listServicesAdmin(tenantId: string) {
     price: s.price,
     durationMinutes: s.durationMinutes,
     isActive: s.active,
+    iconId: s.iconId,
     totalAppointments: countMap.get(s.id) ?? 0,
   }));
 }
@@ -839,15 +692,23 @@ export async function createBarber(adminId: string, tenantId: string, data: { na
 }
 
 // RF02 / RN03: cria serviço (nome único case-insensitive).
-export async function createService(adminId: string, tenantId: string, data: { name: string; durationMinutes: number; price: number }) {
+export async function createService(adminId: string, tenantId: string, data: { name: string; durationMinutes: number; price: number; iconId?: string }) {
   const dup = await prisma.service.findFirst({ where: { tenantId, name: { equals: data.name, mode: 'insensitive' } } });
   if (dup) throw new BusinessError('DUPLICATE_SERVICE_NAME', 'Já existe um serviço com este nome.', 422);
 
+  // Ícone deve ser global ou da própria barbearia (FEAT-082).
+  if (data.iconId) {
+    const icon = await prisma.serviceIcon.findUnique({ where: { id: data.iconId }, select: { tenantId: true } });
+    if (!icon || (icon.tenantId !== null && icon.tenantId !== tenantId)) {
+      throw new BusinessError('ICON_NOT_FOUND', 'Ícone não encontrado.', 404);
+    }
+  }
+
   const service = await prisma.service.create({
-    data: { name: data.name, durationMinutes: data.durationMinutes, price: new Prisma.Decimal(data.price).toDecimalPlaces(2), active: true, tenantId },
+    data: { name: data.name, durationMinutes: data.durationMinutes, price: new Prisma.Decimal(data.price).toDecimalPlaces(2), active: true, tenantId, iconId: data.iconId ?? null },
   });
   adminAuditLog(adminId, 'SERVICE_CREATE', null, { serviceId: service.id, name: service.name });
-  return { serviceId: service.id, name: service.name, price: service.price, durationMinutes: service.durationMinutes, isActive: service.active };
+  return { serviceId: service.id, name: service.name, price: service.price, durationMinutes: service.durationMinutes, isActive: service.active, iconId: service.iconId };
 }
 
 // RF03 / V02 / RN01: hard-delete de barbeiro só sem agendamentos; limpa config própria na transação.
@@ -873,7 +734,6 @@ export async function deleteBarber(adminId: string, tenantId: string, barberId: 
     prisma.scheduleBlock.deleteMany({ where: { barberId } }),
     prisma.vacationBlock.deleteMany({ where: { barberId } }),
     prisma.barberGoal.deleteMany({ where: { barberId } }),
-    prisma.barberCommission.deleteMany({ where: { barberId } }),
     prisma.review.deleteMany({ where: { barberId } }),
     prisma.clientNote.deleteMany({ where: { authorId: barberId } }),
     prisma.user.delete({ where: { id: barberId } }),
@@ -895,9 +755,6 @@ export async function deleteService(adminId: string, tenantId: string, serviceId
       { suggestion: `PATCH /api/v1/admin/services/${serviceId}/status` },
     );
   }
-  await prisma.$transaction([
-    prisma.barberCommission.deleteMany({ where: { serviceId } }),
-    prisma.service.delete({ where: { id: serviceId } }),
-  ]);
+  await prisma.service.delete({ where: { id: serviceId } });
   adminAuditLog(adminId, 'SERVICE_HARD_DELETE', { serviceId }, null);
 }

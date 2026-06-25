@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-25T15:30:00
+last_updated: 2026-06-25T23:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1145,6 +1145,24 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `acceptance`: 7/14 dias → timeline com exatamente 7/14 nós; mês atual a partir do dia 1; gap-fill com `0.00`; só `CONCLUDED` computa; dia da semana acumula por ISODOW; inativo com `(Inativo)`; range inválido → 400; não-admin → 403.
 - `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — LAST_7_DAYS=7, LAST_14_DAYS=14 (CT01), CURRENT_MONTH=24 (01→24/jun), dow sempre 7 e agrupado por ISODOW (CT02: terça acumula), barbeiros agregados e ordenados desc, `LAST_YEAR`→`400 INVALID_ANALYTICS_RANGE`, cliente→`403`.
 - `risk`: `LOW`
+- `target_release`: `UNRELEASED`
+
+### FEAT-082 - Catálogo de ícones SVG + remoção de repasses/comissões
+
+- `status`: `IMPLEMENTED`
+- `area`: `ADMIN` / `PLATFORM`
+- `actors`: `ADMIN`, `DEV` (ícones globais), `CLIENT` (renderização)
+- `description`: Duas mudanças: (A) **remoção completa** do comissionamento (tabela `barber_commissions`, endpoints `/admin/commissions[/settlement]`, cálculos e UI "Repasses"); o faturamento passa a ser 100% do tenant. (B) **biblioteca de ícones SVG** para serviços — ícones globais (plataforma) + upload de SVGs próprios pelo admin, com sanitização anti-XSS; renderização vetorial que herda a cor do tema (`currentColor`). Suporte estrito a `image/svg+xml`.
+- `business_rules`: **RN01** — ícone com `tenant_id` NULO = global; preenchido = privado da barbearia. **RN02** — sem divisão de valores com o barbeiro na aplicação. **RN03** — SVG ≤ 50 KB.
+- `security_nfr` (XSS): `sanitizeSvg` remove `<script>/<iframe>/<foreignObject>/object/embed/use/animate/set`, atributos `on*`, `javascript:`/`data:text/html` e `DOCTYPE/ENTITY` antes de persistir. Front usa `dangerouslySetInnerHTML` (justificado — sanitização no backend).
+- `api`: `GET /tenants/:tenantId/icons` (público; `type` GLOBAL/CUSTOM); `GET`/`POST /admin/icons`; `POST /admin/services` aceita `iconId`. Erros: `SVG_FILE_TOO_LARGE 413`, `INVALID_SVG_FORMAT 422`, `ICON_NOT_FOUND 404`.
+- `database_changes`: `0015_service_icons` — `DROP TABLE barber_commissions`; `CREATE TABLE service_icons`; `services.icon_id` (FK); seed de 5 ícones globais (Tesoura/Máquina/Navalha/Barba/Toalha) com `currentColor`.
+- `frontend`: aba "Repasses" e lógica de comissão/settlement removidas; form de serviço com galeria de ícones + upload de SVG; ícone renderizado na lista admin e nos cards do catálogo (`SafeSvg`).
+- `api_compatibility`: `BREAKING` para `/admin/commissions*` (removidos); aditivo para ícones.
+- `depends_on`: `FEAT-073`, `FEAT-075`
+- `acceptance`: `/admin/commissions`→404; 5 globais; upload com `<script>`/`onclick`→salvo limpo + "Código inseguro removido"; >50 KB→413; não-SVG→422; custom no list do tenant; serviço com `iconId` renderiza o vetor.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — commissions 404, 5 globais, sanitização (script/onclick removidos), 422 formato, 413 tamanho, custom no list.
+- `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas

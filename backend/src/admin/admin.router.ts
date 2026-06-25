@@ -5,16 +5,16 @@ import { asyncHandler } from '../common/asyncHandler';
 import { requireStrictAdmin } from './admin.middleware';
 import {
   CouponSchema,
-  CommissionSchema,
   CreateBarberSchema,
   CreateServiceSchema,
   GlobalSettingsSchema,
   DateQuerySchema,
+  IconSchema,
   NoShowSchema,
-  RangeQuerySchema,
   StatusSchema,
   VacationBlockSchema,
 } from './admin.schemas';
+import { createIcon, listIcons } from '../catalog/icons.service';
 import {
   applyNoShow,
   createBarber,
@@ -26,15 +26,12 @@ import {
   getGlobalSettings,
   getMyBarbershop,
   updateGlobalSettings,
-  deleteCommission,
   deleteCoupon,
   deleteVacationBlock,
-  getCommissionSettlement,
   getDashboard,
   getGlobalGrid,
   listAdminAlerts,
   listBarbersAdmin,
-  listCommissions,
   listCoupons,
   listServicesAdmin,
   listVacationBlocks,
@@ -44,7 +41,6 @@ import {
   setBarberStatus,
   setServiceStatus,
   updateCoupon,
-  upsertCommission,
 } from './admin.service';
 import { getAnalytics } from './analytics.service';
 
@@ -98,31 +94,6 @@ adminRouter.delete('/coupons/:id', asyncHandler(async (req, res) => {
   const id = UuidParam.parse(req.params.id);
   await deleteCoupon(T(req), id);
   res.status(204).end();
-}));
-
-adminRouter.get('/commissions', asyncHandler(async (req, res) => {
-  res.json(await listCommissions(T(req)));
-}));
-
-adminRouter.put('/commissions', asyncHandler(async (req, res) => {
-  const body = CommissionSchema.parse(req.body);
-  res.json(await upsertCommission(req.user!.id, T(req), body));
-}));
-
-adminRouter.post('/commissions', asyncHandler(async (req, res) => {
-  const body = CommissionSchema.parse(req.body);
-  res.status(201).json(await upsertCommission(req.user!.id, T(req), body));
-}));
-
-adminRouter.delete('/commissions/:id', asyncHandler(async (req, res) => {
-  const id = UuidParam.parse(req.params.id);
-  await deleteCommission(req.user!.id, T(req), id);
-  res.status(204).end();
-}));
-
-adminRouter.get('/commissions/settlement', asyncHandler(async (req, res) => {
-  const { from, to } = RangeQuerySchema.parse(req.query);
-  res.json(await getCommissionSettlement(T(req), from, to));
 }));
 
 adminRouter.get('/vacation-blocks', asyncHandler(async (req, res) => {
@@ -187,6 +158,16 @@ adminRouter.delete('/services/:id', asyncHandler(async (req, res) => {
 // Barbearia do admin (código de conexão / QR)
 adminRouter.get('/barbershop', asyncHandler(async (req, res) => {
   res.json(await getMyBarbershop(T(req)));
+}));
+
+// FEAT-082: biblioteca de ícones (admin) — listar e enviar SVG customizado.
+adminRouter.get('/icons', asyncHandler(async (req, res) => {
+  res.json(await listIcons(T(req)));
+}));
+
+adminRouter.post('/icons', asyncHandler(async (req, res) => {
+  const { name, svgContent } = IconSchema.parse(req.body);
+  res.status(201).json(await createIcon(T(req), name, svgContent));
 }));
 
 // FEAT-081: BFF de analytics financeiro (3 datasets para os gráficos).

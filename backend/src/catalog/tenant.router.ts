@@ -7,6 +7,7 @@ import { asyncHandler } from '../common/asyncHandler';
 import { BusinessError } from '../common/BusinessError';
 import { prisma } from '../prisma';
 import { sendOtp, verifyOtp } from '../auth/otp.service';
+import { listIcons } from './icons.service';
 
 // FEAT-077: schemas OTP por telefone.
 const OtpSendSchema = z.object({ phone: z.string().min(8).max(20) });
@@ -80,6 +81,11 @@ tenantRouter.post('/:tenantId/auth/otp/verify', asyncHandler(async (req, res) =>
 
 tenantRouter.get('/:tenantId/services', asyncHandler(async (req, res) => {
   res.json(await findActiveServices(req.tenantId!));
+}));
+
+// FEAT-082: biblioteca de ícones disponíveis (globais + da barbearia).
+tenantRouter.get('/:tenantId/icons', asyncHandler(async (req, res) => {
+  res.json(await listIcons(req.tenantId!));
 }));
 
 tenantRouter.get('/:tenantId/barbers', asyncHandler(async (req, res) => {

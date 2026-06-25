@@ -210,6 +210,28 @@ const CATEGORY_META: Record<Category, { icon: string; description: string }> = {
   Especiais: { icon: 'auto_awesome', description: 'Combos e premium' },
 }
 
+// Ícones vetoriais custom por categoria: diamante (Especiais/premium) e bigode (Barba).
+// Demais categorias usam Material Symbols. width/height 1em + currentColor herdam a classe.
+function CategoryIcon({ category, className }: { category: Category; className?: string }) {
+  if (category === 'Especiais') {
+    return (
+      <svg viewBox="0 -5.47 56.254 56.254" width="1em" height="1em" fill="currentColor" className={className} aria-hidden="true">
+        <path d="M494.211,354.161l1.174-1.366H482.552L469.8,367.5h12.94Zm-8.4,13.336H510.05l-6.589-7.664-5.528-6.429-8.354,9.713Zm-15.856,2.329,24.1,25.356L482.53,369.826Zm40.824,0h-2.1l-8.829,0H485.083l12.774,28.1.082.178,12.17-26.8Zm-8.94,25.322,24.057-25.32H513.337Zm24.215-27.65L513.3,352.8H500.478l12.642,14.7Z" transform="translate(-469.802 -352.795)"/>
+      </svg>
+    )
+  }
+  if (category === 'Barba') {
+    return (
+      <svg viewBox="0 0 1280 763" width="1em" height="1em" fill="currentColor" preserveAspectRatio="xMidYMid meet" className={className} aria-hidden="true">
+        <g transform="translate(0,763) scale(0.1,-0.1)">
+          <path d="M247 7573 c-3 -16 -17 -82 -31 -148 -83 -392 -154 -909 -192 -1395 -22 -271 -25 -962 -6 -1185 60 -694 181 -1179 402 -1615 123 -240 265 -435 441 -605 118 -114 150 -138 499 -380 1295 -897 2200 -1425 3055 -1780 994 -413 1883 -551 2643 -409 352 65 1010 236 1522 394 1521 471 2684 1053 3266 1634 176 176 260 288 349 465 69 138 71 145 200 826 218 1153 322 1854 381 2565 22 261 25 825 6 985 -19 153 -55 326 -87 415 -27 74 -123 255 -131 247 -3 -2 -54 -152 -113 -333 -399 -1207 -703 -1924 -896 -2114 -109 -107 -263 -209 -485 -320 -376 -188 -878 -359 -1233 -420 -217 -37 -185 -47 -510 157 -672 420 -985 567 -1372 646 -157 31 -463 31 -611 -1 -313 -67 -624 -235 -775 -417 l-61 -74 -50 59 c-28 32 -93 98 -146 146 -79 72 -115 96 -206 140 -257 123 -480 169 -811 168 -223 -1 -329 -11 -550 -55 -556 -110 -1209 -383 -1807 -754 l-121 -76 -66 22 c-218 72 -574 270 -936 521 -315 218 -888 657 -937 719 -110 137 -314 867 -498 1778 -22 112 -43 208 -46 213 -3 4 -22 8 -43 8 -34 0 -39 -3 -44 -27z m6873 -3153 c672 -52 1270 -168 1856 -361 l152 -50 -13 -42 c-133 -439 -392 -796 -680 -937 -142 -69 -216 -85 -400 -84 l-160 0 -295 76 c-505 131 -731 168 -1008 168 -252 0 -410 -28 -727 -125 -311 -95 -540 -122 -792 -94 -444 49 -785 298 -992 723 -55 112 -121 281 -121 310 0 7 74 36 178 69 602 193 1284 314 1997 357 183 10 820 4 1005 -10z"/>
+        </g>
+      </svg>
+    )
+  }
+  return <Icon name={CATEGORY_META[category].icon} className={className} />
+}
+
 const STATUS_META: Record<string, { label: string; color: string }> = {
   CONFIRMED: { label: 'Confirmado', color: 'bg-green-100 text-green-800' },
   PENDING_PAYMENT: { label: 'Aguardando pagamento', color: 'bg-yellow-100 text-yellow-800' },
@@ -1429,7 +1451,7 @@ function HomePage({
             {availableCategories.map((c) => (
               <section key={c} id={`categoria-${c}`} className="scroll-mt-20 lg:scroll-mt-6" aria-label={c}>
                 <div className="flex items-center gap-2 mb-3 border-b border-on-surface/10 pb-2">
-                  <Icon name={CATEGORY_META[c].icon} className="text-primary text-[22px]" />
+                  <CategoryIcon category={c} className="text-primary text-[22px]" />
                   <h2 className="text-[22px] font-bold text-on-surface">{c}</h2>
                   <span className="text-[12px] font-medium text-on-surface-variant">{CATEGORY_META[c].description}</span>
                 </div>

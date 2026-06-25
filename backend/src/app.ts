@@ -34,7 +34,16 @@ import { platformRouter } from './platform/platform.router';
 export function createApp() {
   const app = express();
 
-  app.use(cors({ origin: config.CORS_ALLOWED_ORIGIN, credentials: true }));
+  // CORS_ALLOWED_ORIGIN aceita lista separada por vírgula (apex, www, previews, localhost).
+  const allowedOrigins = config.CORS_ALLOWED_ORIGIN.split(',').map(o => o.trim()).filter(Boolean);
+  app.use(cors({
+    origin(origin, callback) {
+      // Sem Origin (curl/health/server-to-server) ou origem na lista → permite.
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      callback(new Error(`Origin não permitida pelo CORS: ${origin}`));
+    },
+    credentials: true,
+  }));
   app.use(express.json());
 
   app.get('/actuator/health', (_req, res) => res.json({ status: 'UP' }));

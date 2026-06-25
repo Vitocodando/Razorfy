@@ -84,7 +84,7 @@ O produto cobre três audiências:
 ### Plataforma técnica
 - **Multi-tenant** com isolamento por `tenant_id` em todas as tabelas.
 - **Barramento de eventos de domínio** (event-driven) pós-commit, *future-proof* para WebSockets.
-- **Notificações** Push e WhatsApp (Z-API) via outbox persistente com retry.
+- **Notificações** Push e WhatsApp (WaSenderAPI) via outbox persistente com retry.
 - Revalidação passiva no front (React Query: window-focus + polling).
 
 > O catálogo completo e versionado de funcionalidades, regras de negócio (RN) e casos de teste está em [`docs/FEATURES_BUGS_HOTFIXES.md`](docs/FEATURES_BUGS_HOTFIXES.md).
@@ -109,7 +109,7 @@ O produto cobre três audiências:
                   └────────┬─────────┘
                            │
                   ┌────────▼─────────┐        ┌──────────────┐
-                  │  PostgreSQL      │        │  Z-API       │
+                  │  PostgreSQL      │        │ WaSenderAPI  │
                   │  (Supabase)      │        │  (WhatsApp)  │
                   └──────────────────┘        └──────────────┘
 ```
@@ -135,7 +135,7 @@ Princípios de design do backend:
 | **Mobile** | Expo SDK 56, React Native, TypeScript, React Navigation, expo-camera, expo-secure-store |
 | **Backend** | Node.js 22, Express, TypeScript, Prisma 6, Zod, otplib, bcrypt, jsonwebtoken |
 | **Banco** | PostgreSQL (Supabase) |
-| **Integrações** | Z-API (WhatsApp), Google OAuth 2.0 |
+| **Integrações** | WaSenderAPI (WhatsApp), Google OAuth 2.0 |
 | **Infra** | Render (API), Vercel (web), Docker Compose (dev) |
 
 ---
@@ -155,7 +155,7 @@ Razorfy/
 │       ├── platform/         Backoffice mestre (role DEV)
 │       ├── catalog/          Serviços, barbeiros, tenants
 │       ├── cashback/         Carteira e transações
-│       ├── notification/     Outbox + adapter WhatsApp (Z-API)
+│       ├── notification/     Outbox + adapter WhatsApp (WaSenderAPI)
 │       ├── events/           Barramento de eventos de domínio
 │       ├── middleware/       authenticate, resolveTenant, requireRole
 │       └── common/           crypto, phone, errors
@@ -223,8 +223,8 @@ Configuradas em `backend/.env` (validadas por Zod no boot). Frontend usa `VITE_A
 | `PAYMENT_HOLD_MINUTES` | | `10` | Tempo de reserva temporária |
 | `BUSINESS_TIMEZONE` | | `America/Sao_Paulo` | Fuso de negócio |
 | `CORS_ALLOWED_ORIGIN` | | `http://localhost:5173` | Origens permitidas (lista separada por vírgula) |
-| `WHATSAPP_GATEWAY_URL` | | — | Endpoint Z-API send-text. Ausente ⇒ modo simulado |
-| `WHATSAPP_CLIENT_TOKEN` | | — | Token de segurança da conta Z-API (`Client-Token`) |
+| `WHATSAPP_GATEWAY_URL` | | — | Endpoint de envio WaSenderAPI. Ausente ⇒ modo simulado |
+| `WHATSAPP_API_KEY` | | — | Chave da conta WaSenderAPI (header `Authorization: Bearer`) |
 | `NOTIFICATION_MAX_ATTEMPTS` | | `5` | Tentativas máximas do outbox |
 | `DEV_BOOTSTRAP_ENABLED` | | `false` | Cria seeds de usuários no boot |
 | `DEV_ADMIN_EMAIL` / `DEV_ADMIN_PASSWORD` | | — | Admin seed |
@@ -296,13 +296,13 @@ Tenant padrão: **Razorfy** — código de conexão **`RAZORFY`**.
 
 ## Notificações (WhatsApp)
 
-Pipeline desacoplado: serviços gravam na tabela `notification_outbox`; um processador (intervalo de 5 s) renderiza o texto pt-BR, respeita o consentimento do destinatário e envia via **Z-API**, com retry/backoff.
+Pipeline desacoplado: serviços gravam na tabela `notification_outbox`; um processador (intervalo de 5 s) renderiza o texto pt-BR, respeita o consentimento do destinatário e envia via **WaSenderAPI**, com retry/backoff.
 
 Para ativar o envio real, configure no backend:
 
 ```env
-WHATSAPP_GATEWAY_URL=https://api.z-api.io/instances/SEU_ID/token/SEU_TOKEN/send-text
-WHATSAPP_CLIENT_TOKEN=seu_client_token
+WHATSAPP_GATEWAY_URL=https://wasenderapi.com/api/send-message
+WHATSAPP_API_KEY=sua_chave_wasenderapi
 ```
 
 Sem essas variáveis, as mensagens ficam em **modo simulado** (apenas log) e o sistema não quebra. Eventos cobertos: confirmação, cancelamento, conclusão, lembrete (2 h antes), no-show, win-back e OTP de cadastro.

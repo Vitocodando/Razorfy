@@ -82,7 +82,7 @@ async function send(msg: { channel: string; destination: string; eventType: stri
     console.log(`[push] enviado para ${msg.destination}: ${msg.eventType}`);
     return;
   }
-  // WHATSAPP via Z-API: renderiza texto pt-BR do payload e envia.
+  // WHATSAPP via WaSenderAPI: renderiza texto pt-BR do payload e envia.
   const payload = (msg.payload && typeof msg.payload === 'object' ? msg.payload : {}) as Record<string, unknown>;
   await sendWhatsappText(msg.destination, renderMessage(msg.eventType, payload));
 }

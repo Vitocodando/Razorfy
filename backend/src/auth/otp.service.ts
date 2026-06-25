@@ -26,7 +26,7 @@ function generateCode(): string {
   return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
-// Dispara via Z-API. Se configurado e falhar → 503 (não grava OTP — RN/Dep).
+// Dispara via WhatsApp (WaSenderAPI). Se configurado e falhar → 503 (não grava OTP — RN/Dep).
 async function dispatchWhatsapp(phone: string, code: string): Promise<void> {
   if (!whatsappConfigured()) {
     console.log(`[otp] (dev) código para ${phone}: ${code}`);

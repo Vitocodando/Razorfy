@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-23T01:30:00
+last_updated: 2026-06-25T15:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1096,17 +1096,17 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 
-### FEAT-079 - Integração de notificações WhatsApp (Z-API)
+### FEAT-079 - Integração de notificações WhatsApp (WaSenderAPI)
 
 - `status`: `IMPLEMENTED`
 - `area`: `NOTIFICATION`
-- `actors`: `CLIENT`, `Z-API` (gateway externo)
-- `description`: Adapter Z-API para o envio real das notificações WhatsApp já orquestradas (outbox + processor). Renderiza o texto pt-BR a partir do `eventType`/payload, autentica com `Client-Token` e envia no contrato Z-API `{phone, message}`. Cobre lembrete (2h antes), confirmação, cancelamento, conclusão, no-show, win-back e o OTP de cadastro (FEAT-077). Z-API envia texto livre → não exige template HSM da Meta.
-- `implementation`: `notification/whatsapp.ts` — `renderMessage(eventType, payload)` (mapa de eventos → texto pt-BR; eventos com `body` pronto reusam o texto), `sendWhatsappText(destination, message)` (telefone → dígitos sem `+`, header `Client-Token`, POST send-text; lança em !ok → retry/backoff do processor). `outboxProcessor.send` e `otp.service` passam a usar o adapter.
-- `config`: `WHATSAPP_GATEWAY_URL` = endpoint send-text completo da instância (`https://api.z-api.io/instances/{id}/token/{token}/send-text`); `WHATSAPP_CLIENT_TOKEN` = token de segurança da conta. Ausentes → modo simulado (log), sistema não quebra.
-- `pending_ops` (fora do código): criar conta/instância Z-API, conectar o WhatsApp (QR), preencher as 2 variáveis, reiniciar. Sem isso, notificações ficam em modo simulado.
+- `actors`: `CLIENT`, `WaSenderAPI` (gateway externo)
+- `description`: Adapter WaSenderAPI para o envio real das notificações WhatsApp já orquestradas (outbox + processor). Renderiza o texto pt-BR a partir do `eventType`/payload, autentica com `Authorization: Bearer <API_KEY>` e envia no contrato `{to, text}` (telefone em E.164). Cobre lembrete (2h antes), confirmação, cancelamento, conclusão, no-show, win-back e o OTP de cadastro (FEAT-077). Texto livre → não exige template HSM da Meta. (Originalmente Z-API; trocado por WaSenderAPI — só o adapter muda.)
+- `implementation`: `notification/whatsapp.ts` — `renderMessage(eventType, payload)` (mapa de eventos → texto pt-BR; eventos com `body` pronto reusam o texto), `sendWhatsappText(destination, message)` (header `Authorization: Bearer`, POST `{to, text}`; lança em !ok → retry/backoff do processor). `outboxProcessor.send` e `otp.service` usam o adapter.
+- `config`: `WHATSAPP_GATEWAY_URL` = endpoint de envio (`https://wasenderapi.com/api/send-message`); `WHATSAPP_API_KEY` = chave da conta (Bearer). Ausentes → modo simulado (log), sistema não quebra.
+- `pending_ops` (fora do código): criar conta WaSenderAPI, conectar o WhatsApp, preencher as 2 variáveis, reiniciar. Sem isso, notificações ficam em modo simulado.
 - `depends_on`: `FEAT-077`
-- `acceptance`: render correto por evento; com gateway configurado, mensagens saem via Z-API; falha do gateway → retry (5x, backoff 5min) e `FAILED` ao esgotar; consentimento (`notificationWhatsappEnabled`) respeitado.
+- `acceptance`: render correto por evento; com gateway configurado, mensagens saem via WaSenderAPI; falha do gateway → retry (5x, backoff 5min) e `FAILED` ao esgotar; consentimento (`notificationWhatsappEnabled`) respeitado.
 - `tests`: build backend ✓; render validado para todos os eventos (CONFIRMED/CANCELLED/CONCLUDED/REMINDER/NO_SHOW_PENALTY/WIN_BACK).
 - `risk`: `LOW`
 - `target_release`: `UNRELEASED`

@@ -1,9 +1,8 @@
 import { config } from '../config';
 
-// Adapter Z-API (FEAT-079). Z-API envia texto livre (não exige template HSM da Meta).
-// WHATSAPP_GATEWAY_URL = endpoint completo de send-text da instância:
-//   https://api.z-api.io/instances/{instanceId}/token/{instanceToken}/send-text
-// WHATSAPP_CLIENT_TOKEN = token de segurança da conta (header Client-Token).
+// Adapter WaSenderAPI (FEAT-079). Envia texto livre (não exige template HSM da Meta).
+// WHATSAPP_GATEWAY_URL = endpoint de envio (ex.: https://wasenderapi.com/api/send-message).
+// WHATSAPP_API_KEY     = chave da conta (header Authorization: Bearer ...).
 
 function fmtDateTime(iso: string): string {
   return new Date(iso).toLocaleString('pt-BR', {
@@ -37,19 +36,15 @@ export function renderMessage(eventType: string, payload: Payload): string {
   }
 }
 
-// Telefone para o formato Z-API: apenas dígitos (sem '+').
-function toZapiPhone(destination: string): string {
-  return destination.replace(/\D/g, '');
-}
-
 export function whatsappConfigured(): boolean {
-  return Boolean(config.WHATSAPP_GATEWAY_URL);
+  return Boolean(config.WHATSAPP_GATEWAY_URL && config.WHATSAPP_API_KEY);
 }
 
-// Envia texto via Z-API. Lança em falha (processador faz retry/backoff).
+// Envia texto via WaSenderAPI. Contrato: POST com header Authorization: Bearer <API_KEY>
+// e body { to, text }. `to` em E.164 (com '+'). Lança em falha (processor faz retry/backoff).
 export async function sendWhatsappText(destination: string, message: string): Promise<void> {
   const url = config.WHATSAPP_GATEWAY_URL;
-  if (!url) {
+  if (!url || !config.WHATSAPP_API_KEY) {
     console.log(`[whatsapp] (simulado, sem gateway) ${destination}: ${message}`);
     return;
   }
@@ -57,12 +52,12 @@ export async function sendWhatsappText(destination: string, message: string): Pr
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(config.WHATSAPP_CLIENT_TOKEN ? { 'Client-Token': config.WHATSAPP_CLIENT_TOKEN } : {}),
+      Authorization: `Bearer ${config.WHATSAPP_API_KEY}`,
     },
-    body: JSON.stringify({ phone: toZapiPhone(destination), message }),
+    body: JSON.stringify({ to: destination, text: message }),
   });
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Z-API HTTP ${response.status} ${text.slice(0, 200)}`);
+    throw new Error(`WaSenderAPI HTTP ${response.status} ${text.slice(0, 200)}`);
   }
 }

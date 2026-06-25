@@ -19,8 +19,8 @@ const Schema = z.object({
   BUSINESS_TIMEZONE: z.string().default('America/Sao_Paulo'),
   CORS_ALLOWED_ORIGIN: z.string().default('http://localhost:5173'),
   WHATSAPP_GATEWAY_URL: z.string().optional(),
-  // Z-API (FEAT-079): token de segurança da conta (header Client-Token).
-  WHATSAPP_CLIENT_TOKEN: z.string().optional(),
+  // WaSenderAPI (FEAT-079): chave da conta (header Authorization: Bearer ...).
+  WHATSAPP_API_KEY: z.string().optional(),
   NOTIFICATION_MAX_ATTEMPTS: z.coerce.number().int().default(5),
   DEV_BOOTSTRAP_ENABLED: z.string().transform(v => v === 'true').default('false'),
   DEV_ADMIN_EMAIL: z.string().email().optional(),

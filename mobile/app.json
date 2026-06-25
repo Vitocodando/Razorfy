@@ -20,7 +20,7 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/razorfy.png"
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store",

@@ -35,11 +35,13 @@ export function createApp() {
   const app = express();
 
   // CORS_ALLOWED_ORIGIN aceita lista separada por vírgula (apex, www, previews, localhost).
-  const allowedOrigins = config.CORS_ALLOWED_ORIGIN.split(',').map(o => o.trim()).filter(Boolean);
+  // Normaliza removendo barra final — o browser nunca envia Origin com barra.
+  const stripSlash = (s: string) => s.trim().replace(/\/+$/, '');
+  const allowedOrigins = config.CORS_ALLOWED_ORIGIN.split(',').map(stripSlash).filter(Boolean);
   app.use(cors({
     origin(origin, callback) {
       // Sem Origin (curl/health/server-to-server) ou origem na lista → permite.
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      if (!origin || allowedOrigins.includes(stripSlash(origin))) return callback(null, true);
       callback(new Error(`Origin não permitida pelo CORS: ${origin}`));
     },
     credentials: true,

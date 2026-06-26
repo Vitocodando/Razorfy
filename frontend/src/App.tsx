@@ -1426,7 +1426,7 @@ function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant
           <ErrorBanner message={error} />
           <div className="space-y-4">
             <FloatingField label="Nome completo" id="name" name="name" type="text" minLength={3} required />
-            <FloatingField label="Telefone (WhatsApp)" id="phone" name="phone" type="tel" inputMode="tel" placeholder="62 9 8888-7777" required />
+            <FloatingField label="Telefone (WhatsApp)" id="phone" name="phone" type="tel" inputMode="tel" required />
             <FloatingField label="E-mail (opcional)" id="email" name="email" type="email" />
             <div className="relative w-full">
               <FloatingField label="Senha (mínimo 8 caracteres)" id="password" name="password" type={showPassword ? 'text' : 'password'} minLength={8} required />

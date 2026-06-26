@@ -6,7 +6,7 @@ import { config, googleOAuthEnabled } from '../config';
 import { BusinessError } from '../common/BusinessError';
 import { UserRole } from '../user/user.types';
 import { decryptSecret } from '../common/crypto';
-import { classifyIdentifier } from '../common/phone';
+import { classifyIdentifier, normalizeE164 } from '../common/phone';
 import { verifyCode } from './twofa.service';
 import { consumeOtp } from './otp.service';
 
@@ -48,33 +48,26 @@ function getGoogleClient(): OAuth2Client {
 
 export async function register(data: {
   name: string;
-  identifier: string;
+  phone: string;
+  email?: string;
   password: string;
   tenantSlug?: string;
 }) {
-  // FEAT-078: identifier é e-mail OU telefone.
-  const { email, phone } = classifyIdentifier(data.identifier);
+  // FEAT-083: telefone obrigatório; e-mail opcional.
+  const phone = normalizeE164(data.phone);
+  const email = data.email?.trim() ? data.email.trim().toLowerCase() : null;
   const tenantId = await resolveActiveTenant(data.tenantSlug);
 
-  const existing = await prisma.user.findFirst({
-    where: { tenantId, ...(email ? { email: { equals: email, mode: 'insensitive' } } : { phone }) },
-  });
-  if (existing) {
-    throw email
-      ? new BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409)
-      : new BusinessError('PHONE_ALREADY_EXISTS', 'Este telefone já está cadastrado.', 409);
+  const phoneTaken = await prisma.user.findFirst({ where: { tenantId, phone } });
+  if (phoneTaken) throw new BusinessError('PHONE_ALREADY_EXISTS', 'Este telefone já está cadastrado.', 409);
+  if (email) {
+    const emailTaken = await prisma.user.findFirst({ where: { tenantId, email: { equals: email, mode: 'insensitive' } } });
+    if (emailTaken) throw new BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409);
   }
 
   const hash = await bcrypt.hash(data.password, 12);
   const user = await prisma.user.create({
-    data: {
-      name: data.name,
-      email: email ?? null,
-      phone: phone ?? null,
-      password: hash,
-      role: 'CLIENT',
-      tenantId,
-    },
+    data: { name: data.name, email, phone, password: hash, role: 'CLIENT', tenantId },
   });
 
   return sessionFor(user);

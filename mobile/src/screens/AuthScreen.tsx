@@ -27,7 +27,9 @@ export function AuthScreen() {
   const [otpCode, setOtpCode] = useState('');
   const [otpName, setOtpName] = useState('');
   const [name, setName] = useState('');
-  const [identifier, setIdentifier] = useState(''); // FEAT-078: e-mail ou telefone
+  const [identifier, setIdentifier] = useState(''); // login: e-mail ou telefone
+  const [regPhone, setRegPhone] = useState(''); // cadastro: telefone obrigatório
+  const [regEmail, setRegEmail] = useState(''); // cadastro: e-mail opcional
   const [password, setPassword] = useState('');
   const [secure, setSecure] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -37,11 +39,10 @@ export function AuthScreen() {
 
   async function submit() {
     setError('');
-    if (mode === 'register' && name.trim().length < 3) {
-      setError('Informe seu nome completo.');
-      return;
-    }
-    if (identifier.trim().length < 3) {
+    if (mode === 'register') {
+      if (name.trim().length < 3) { setError('Informe seu nome completo.'); return; }
+      if (regPhone.replace(/\D/g, '').length < 10) { setError('Informe seu telefone (WhatsApp) com DDD.'); return; }
+    } else if (identifier.trim().length < 3) {
       setError('Informe seu e-mail ou telefone.');
       return;
     }
@@ -56,7 +57,7 @@ export function AuthScreen() {
         const r = await login(identifier, password);
         if (r.require2fa && r.preAuthToken) { setPreAuth(r.preAuthToken); setCode(''); }
       } else {
-        await register(name, identifier, password);
+        await register(name, regPhone, regEmail || undefined, password);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível autenticar.');
@@ -252,25 +253,46 @@ export function AuthScreen() {
               </Text>
 
               {mode === 'register' ? (
+                <>
+                  <Field
+                    icon="person-outline"
+                    label="Nome completo"
+                    placeholder="Como podemos chamar você?"
+                    value={name}
+                    onChangeText={setName}
+                    textContentType="name"
+                  />
+                  <Field
+                    icon="logo-whatsapp"
+                    label="Telefone (WhatsApp)"
+                    placeholder="62 9 8888-7777"
+                    value={regPhone}
+                    onChangeText={setRegPhone}
+                    keyboardType="phone-pad"
+                    textContentType="telephoneNumber"
+                  />
+                  <Field
+                    icon="mail-outline"
+                    label="E-mail (opcional)"
+                    placeholder="voce@email.com"
+                    value={regEmail}
+                    onChangeText={setRegEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    textContentType="emailAddress"
+                  />
+                </>
+              ) : (
                 <Field
-                  icon="person-outline"
-                  label="Nome completo"
-                  placeholder="Como podemos chamar você?"
-                  value={name}
-                  onChangeText={setName}
-                  textContentType="name"
+                  icon="at-outline"
+                  label="E-mail ou telefone"
+                  placeholder="voce@email.com ou +5511988887777"
+                  value={identifier}
+                  onChangeText={setIdentifier}
+                  autoCapitalize="none"
+                  textContentType="username"
                 />
-              ) : null}
-
-              <Field
-                icon="at-outline"
-                label="E-mail ou telefone"
-                placeholder="voce@email.com ou +5511988887777"
-                value={identifier}
-                onChangeText={setIdentifier}
-                autoCapitalize="none"
-                textContentType="username"
-              />
+              )}
 
               <View>
                 <Field

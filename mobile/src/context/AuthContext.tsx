@@ -47,7 +47,8 @@ type AuthContextValue = {
   otpVerify: (phone: string, code: string, name?: string) => Promise<void>;
   register: (
     name: string,
-    identifier: string,
+    phone: string,
+    email: string | undefined,
     password: string,
   ) => Promise<void>;
   logout: () => Promise<void>;
@@ -131,9 +132,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
   );
 
   const register = useCallback(
-    async (name: string, identifier: string, password: string) => {
+    async (name: string, phone: string, email: string | undefined, password: string) => {
       await persist(
-        await api.register(name.trim(), identifier.trim(), password, tenant?.slug),
+        await api.register(name.trim(), phone.trim(), email?.trim() || undefined, password, tenant?.slug),
       );
     },
     [persist, tenant],

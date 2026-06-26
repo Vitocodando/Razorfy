@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-26T15:30:00
+last_updated: 2026-06-26T17:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1170,7 +1170,7 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `status`: `IMPLEMENTED`
 - `area`: `AUTH`
 - `actors`: `CLIENT`, `Google` (OAuth), `WaSenderAPI` (OTP)
-- `description`: Telefone passa a ser requisito para emitir o JWT final. **Cadastro por senha**: telefone obrigatório e e-mail opcional (`POST /auth/register` `{name, phone, email?, password}`) — backend normaliza para E.164 e valida unicidade por tenant. **Login Google**: usuário existente segue direto; **novo usuário** é interceptado — o backend NÃO cria a conta, retorna `202 REQUIRE_WHATSAPP` + `preAuthToken`; o front coleta o telefone (máscara BR), dispara OTP e conclui com `verify-google`.
+- `description`: Telefone passa a ser requisito para emitir o JWT final. **Cadastro por senha**: telefone obrigatório **validado por OTP** + e-mail opcional (`POST /auth/register` `{name, phone, email?, password, code}`) — o front coleta os dados, dispara OTP no telefone e conclui enviando o código; backend `consumeOtp` valida, normaliza E.164, checa unicidade e cria com `is_phone_verified=true`. **Login Google**: usuário existente segue direto; **novo usuário** é interceptado — backend NÃO cria a conta, retorna `202 REQUIRE_WHATSAPP` + `preAuthToken`; front coleta telefone (máscara BR), dispara OTP e conclui com `verify-google`. Máscara `99 9 9999-9999` em todos os campos de telefone (web + mobile).
 - `business_rules`: máquina de estados em 2 fases. **Fase A** (`POST /auth/google`): por Google/e-mail existente → sessão; novo → `202` + `preAuthToken` (claim `type=GOOGLE_PREAUTH`, 15 min, carrega gid/email/name/tnt). **Fase B** (`POST /auth/otp/verify-google`): Bearer preAuthToken + `{phone, code}` → valida OTP, cria/loga CLIENT com telefone verificado e googleId. Telefone já existente no tenant → vincula o Google à conta. Sanitização: máscara `99 9 9999-9999` no front; backend faz `replace(/\D/g)` + prefixo `+55` (E.164). Reaproveita rate-limit de OTP (3/h).
 - `api`: `POST /auth/google` `{code, tenantSlug?}` → 200 sessão **ou** `202 {status:'REQUIRE_WHATSAPP', preAuthToken}`. `POST /auth/otp/verify-google` (Bearer preAuthToken, `{phone, code}`) → JWT final. Envio de OTP reutiliza `POST /tenants/:tenantId/auth/otp/send`. Tokens `GOOGLE_PREAUTH`/`PRE_AUTH` são barrados em rotas normais (`PRE_AUTH_NOT_ALLOWED 401`).
 - `refactor`: `otp.service` expõe `consumeOtp(tenantId, phone, code)` (valida+destrói o OTP, anti-replay) reutilizado por `verifyOtp` e pelo fluxo Google.

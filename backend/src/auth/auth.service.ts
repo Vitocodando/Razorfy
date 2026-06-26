@@ -51,12 +51,14 @@ export async function register(data: {
   phone: string;
   email?: string;
   password: string;
+  code: string;
   tenantSlug?: string;
 }) {
-  // FEAT-083: telefone obrigatório; e-mail opcional.
-  const phone = normalizeE164(data.phone);
+  // FEAT-083: telefone obrigatório e validado por OTP; e-mail opcional.
   const email = data.email?.trim() ? data.email.trim().toLowerCase() : null;
   const tenantId = await resolveActiveTenant(data.tenantSlug);
+  // Valida o código antes de criar (consumeOtp normaliza para E.164 e destrói o OTP).
+  const phone = consumeOtp(tenantId, data.phone, data.code);
 
   const phoneTaken = await prisma.user.findFirst({ where: { tenantId, phone } });
   if (phoneTaken) throw new BusinessError('PHONE_ALREADY_EXISTS', 'Este telefone já está cadastrado.', 409);
@@ -67,7 +69,7 @@ export async function register(data: {
 
   const hash = await bcrypt.hash(data.password, 12);
   const user = await prisma.user.create({
-    data: { name: data.name, email, phone, password: hash, role: 'CLIENT', tenantId },
+    data: { name: data.name, email, phone, password: hash, role: 'CLIENT', tenantId, isPhoneVerified: true },
   });
 
   return sessionFor(user);

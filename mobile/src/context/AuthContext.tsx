@@ -50,6 +50,7 @@ type AuthContextValue = {
     phone: string,
     email: string | undefined,
     password: string,
+    code: string,
   ) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -132,9 +133,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
   );
 
   const register = useCallback(
-    async (name: string, phone: string, email: string | undefined, password: string) => {
+    async (name: string, phone: string, email: string | undefined, password: string, code: string) => {
       await persist(
-        await api.register(name.trim(), phone.trim(), email?.trim() || undefined, password, tenant?.slug),
+        await api.register(name.trim(), phone.trim(), email?.trim() || undefined, password, code, tenant?.slug),
       );
     },
     [persist, tenant],

@@ -16,6 +16,7 @@ import { BrandLogo } from '../components/BrandLogo';
 import { ErrorMessage, PrimaryButton } from '../components/ui';
 import { useAuth } from '../context/AuthContext';
 import { colors, fonts } from '../theme';
+import { maskPhoneBR } from '../utils/phone';
 
 type Mode = 'login' | 'register';
 
@@ -28,8 +29,10 @@ export function AuthScreen() {
   const [otpName, setOtpName] = useState('');
   const [name, setName] = useState('');
   const [identifier, setIdentifier] = useState(''); // login: e-mail ou telefone
-  const [regPhone, setRegPhone] = useState(''); // cadastro: telefone obrigatório
+  const [regPhone, setRegPhone] = useState(''); // cadastro: telefone obrigatório (dígitos)
   const [regEmail, setRegEmail] = useState(''); // cadastro: e-mail opcional
+  const [regSent, setRegSent] = useState(false); // OTP do cadastro enviado
+  const [regCode, setRegCode] = useState('');
   const [password, setPassword] = useState('');
   const [secure, setSecure] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -57,7 +60,9 @@ export function AuthScreen() {
         const r = await login(identifier, password);
         if (r.require2fa && r.preAuthToken) { setPreAuth(r.preAuthToken); setCode(''); }
       } else {
-        await register(name, regPhone, regEmail || undefined, password);
+        // FEAT-083: envia OTP do telefone antes de criar a conta.
+        await otpSend(regPhone);
+        setRegCode(''); setRegSent(true);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Não foi possível autenticar.');
@@ -78,10 +83,23 @@ export function AuthScreen() {
     }
   }
 
+  // FEAT-083: conclui o cadastro por senha validando o OTP do telefone.
+  async function submitRegisterCode() {
+    if (regCode.length !== 6) return;
+    setError(''); setLoading(true);
+    try {
+      await register(name, regPhone, regEmail || undefined, password, regCode);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Código inválido.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // FEAT-077: envia OTP para o telefone.
   async function sendOtpCode() {
     setError('');
-    if (otpPhone.replace(/\D/g, '').length < 10) { setError('Informe um telefone válido com DDD.'); return; }
+    if (otpPhone.length < 10) { setError('Informe um telefone válido com DDD.'); return; }
     setLoading(true);
     try {
       await otpSend(otpPhone);
@@ -121,13 +139,13 @@ export function AuthScreen() {
                     <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Entrar com telefone</Text>
                     <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviaremos um código por WhatsApp.</Text>
                     <ErrorMessage message={error} />
-                    <Field icon="call-outline" label="Telefone" placeholder="+55 11 98888-7777" value={otpPhone} onChangeText={setOtpPhone} keyboardType="phone-pad" textContentType="telephoneNumber" />
+                    <Field icon="call-outline" label="Telefone" placeholder="62 9 8888-7777" value={maskPhoneBR(otpPhone)} onChangeText={(t) => setOtpPhone(t.replace(/\D/g, '').slice(0, 11))} keyboardType="phone-pad" textContentType="telephoneNumber" />
                     <PrimaryButton label={loading ? 'Enviando...' : 'Enviar código'} onPress={sendOtpCode} disabled={loading} />
                   </>
                 ) : (
                   <>
                     <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Digite o código</Text>
-                    <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviado para {otpPhone} via WhatsApp.</Text>
+                    <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviado para {maskPhoneBR(otpPhone)} via WhatsApp.</Text>
                     <ErrorMessage message={error} />
                     <TextInput autoFocus keyboardType="number-pad" value={otpCode} onChangeText={(t) => setOtpCode(t.replace(/\D/g, '').slice(0, 6))} placeholder="000000" placeholderTextColor={colors.muted} maxLength={6} style={styles.codeInput} />
                     <Field icon="person-outline" label="Nome (se for seu primeiro acesso)" placeholder="Seu nome" value={otpName} onChangeText={setOtpName} textContentType="name" />
@@ -173,6 +191,40 @@ export function AuthScreen() {
                 <PrimaryButton label={loading ? 'Verificando...' : 'Verificar'} onPress={submitCode} disabled={loading || code.length !== 6} />
                 <Pressable onPress={() => { setPreAuth(null); setCode(''); setError(''); }} style={{ marginTop: 12, alignSelf: 'center' }}>
                   <Text style={styles.tenantChipChange}>Voltar ao login</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </LinearGradient>
+    );
+  }
+
+  // FEAT-083: etapa de código do cadastro por senha.
+  if (regSent) {
+    return (
+      <LinearGradient colors={[colors.blueDark, colors.blue, '#3949ab']} style={styles.background}>
+        <SafeAreaView style={styles.safeArea}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+              <View style={styles.formCard}>
+                <Ionicons name="chatbubble-ellipses-outline" size={40} color={colors.blue} style={{ alignSelf: 'center' }} />
+                <Text style={[styles.formTitle, { textAlign: 'center', marginTop: 8 }]}>Confirme seu WhatsApp</Text>
+                <Text style={[styles.formSubtitle, { textAlign: 'center' }]}>Enviamos um código para {maskPhoneBR(regPhone)}.</Text>
+                <ErrorMessage message={error} />
+                <TextInput
+                  autoFocus
+                  keyboardType="number-pad"
+                  value={regCode}
+                  onChangeText={(t) => setRegCode(t.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="000000"
+                  placeholderTextColor={colors.muted}
+                  maxLength={6}
+                  style={styles.codeInput}
+                />
+                <PrimaryButton label={loading ? 'Criando conta...' : 'Concluir cadastro'} onPress={submitRegisterCode} disabled={loading || regCode.length !== 6} />
+                <Pressable onPress={() => { setRegSent(false); setRegCode(''); setError(''); }} style={{ marginTop: 12, alignSelf: 'center' }}>
+                  <Text style={styles.tenantChipChange}>Voltar</Text>
                 </Pressable>
               </View>
             </ScrollView>
@@ -266,8 +318,8 @@ export function AuthScreen() {
                     icon="logo-whatsapp"
                     label="Telefone (WhatsApp)"
                     placeholder="62 9 8888-7777"
-                    value={regPhone}
-                    onChangeText={setRegPhone}
+                    value={maskPhoneBR(regPhone)}
+                    onChangeText={(t) => setRegPhone(t.replace(/\D/g, '').slice(0, 11))}
                     keyboardType="phone-pad"
                     textContentType="telephoneNumber"
                   />

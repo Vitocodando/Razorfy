@@ -118,11 +118,11 @@ export const api = {
     request<void>('/users/me/2fa', { method: 'DELETE', body: JSON.stringify({ currentPassword, code }) }, token),
   me: (token: string) => request<{ is2faEnabled: boolean; hasPassword: boolean }>('/users/me', {}, token),
 
-  // FEAT-083: telefone obrigatório no cadastro; e-mail opcional.
-  register: (name: string, phone: string, email: string | undefined, password: string, tenantSlug?: string) =>
+  // FEAT-083: telefone obrigatório + validação por OTP; e-mail opcional.
+  register: (name: string, phone: string, email: string | undefined, password: string, code: string, tenantSlug?: string) =>
     request<Session>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ name, phone, email: email?.trim() || undefined, password, tenantSlug }),
+      body: JSON.stringify({ name, phone, email: email?.trim() || undefined, password, code, tenantSlug }),
     }),
 
   // Catálogo contextualizado por tenant (legado sem tenantId → tenant default).

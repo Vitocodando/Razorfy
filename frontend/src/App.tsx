@@ -1174,7 +1174,7 @@ function PhoneOtpScreen({ tenantId, onAuthenticated, onCancel }: {
   onCancel: () => void
 }) {
   const [stage, setStage] = useState<'phone' | 'code'>('phone')
-  const [phone, setPhone] = useState('')
+  const [phone, setPhone] = useState('') // dígitos
   const [code, setCode] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
@@ -1182,7 +1182,7 @@ function PhoneOtpScreen({ tenantId, onAuthenticated, onCancel }: {
 
   async function send(e: FormEvent) {
     e.preventDefault()
-    if (phone.replace(/\D/g, '').length < 10) { setError('Informe um telefone válido com DDD.'); return }
+    if (phone.length < 10) { setError('Informe um telefone válido com DDD.'); return }
     setLoading(true); setError('')
     try {
       await request(`/tenants/${tenantId}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone }) })
@@ -1208,14 +1208,14 @@ function PhoneOtpScreen({ tenantId, onAuthenticated, onCancel }: {
             <h1 className="text-[20px] font-bold text-on-surface text-center">Entrar com telefone</h1>
             <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviaremos um código por WhatsApp.</p>
             <ErrorBanner message={error} />
-            <input autoFocus value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+55 11 98888-7777" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
+            <input autoFocus inputMode="numeric" value={maskPhoneBR(phone)} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="62 9 8888-7777" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
             <PrimaryButton type="submit" disabled={loading}>{loading ? 'Enviando...' : 'Enviar código'}</PrimaryButton>
             <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar</button>
           </form>
         ) : (
           <form className="w-full flex flex-col gap-3" onSubmit={verify}>
             <h1 className="text-[20px] font-bold text-on-surface text-center">Digite o código</h1>
-            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviado para {phone} via WhatsApp.</p>
+            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviado para {maskPhoneBR(phone)} via WhatsApp.</p>
             <ErrorBanner message={error} />
             <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (se for seu primeiro acesso)" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
@@ -1310,6 +1310,9 @@ function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant
   const [googleEnabled, setGoogleEnabled] = useState(false)
   const [pending2fa, setPending2fa] = useState<string | null>(null) // preAuthToken
   const [showOtp, setShowOtp] = useState(false) // FEAT-078: login por telefone (OTP)
+  const [regPhone, setRegPhone] = useState('') // FEAT-083: telefone do cadastro (dígitos)
+  const [regCode, setRegCode] = useState('')
+  const [pendingReg, setPendingReg] = useState<{ name: string; email?: string; password: string } | null>(null)
 
   useEffect(() => {
     request<{ enabled: boolean }>('/auth/google/status')
@@ -1320,20 +1323,30 @@ function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
-    setLoading(true)
     const form = new FormData(event.currentTarget)
-    const body = mode === 'register'
-      ? {
-          name: form.get('name'),
-          phone: form.get('phone'),
-          email: (form.get('email') as string)?.trim() || undefined,
-          password: form.get('password'),
-          tenantSlug: tenant.slug,
-        }
-      : { identifier: form.get('identifier'), password: form.get('password'), tenantSlug: tenant.slug }
+
+    // FEAT-083: cadastro por senha → envia OTP do telefone antes de criar.
+    if (mode === 'register') {
+      if (regPhone.length < 10) { setError('Informe o telefone (WhatsApp) com DDD.'); return }
+      setLoading(true)
+      const data = {
+        name: form.get('name') as string,
+        email: (form.get('email') as string)?.trim() || undefined,
+        password: form.get('password') as string,
+      }
+      try {
+        await request(`/tenants/${tenant.id}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone: regPhone }) })
+        setPendingReg(data); setRegCode('')
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'Não foi possível enviar o código.')
+      } finally { setLoading(false) }
+      return
+    }
+
+    setLoading(true)
+    const body = { identifier: form.get('identifier'), password: form.get('password'), tenantSlug: tenant.slug }
     try {
-      const result = await request<Session | { status: 'REQUIRE_2FA'; preAuthToken: string }>(`/auth/${mode}`, { method: 'POST', body: JSON.stringify(body) })
-      // FA01: 2FA exigido → vai para a tela de código (não abre sessão ainda).
+      const result = await request<Session | { status: 'REQUIRE_2FA'; preAuthToken: string }>('/auth/login', { method: 'POST', body: JSON.stringify(body) })
       if ('status' in result && result.status === 'REQUIRE_2FA') {
         setPending2fa(result.preAuthToken)
         return
@@ -1346,8 +1359,44 @@ function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant
     }
   }
 
+  // FEAT-083: conclui o cadastro validando o OTP do telefone.
+  async function submitRegisterCode(e: FormEvent) {
+    e.preventDefault()
+    if (!pendingReg || regCode.length !== 6) return
+    setLoading(true); setError('')
+    try {
+      const s = await request<Session>('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ ...pendingReg, phone: regPhone, code: regCode, tenantSlug: tenant.slug }),
+      })
+      onAuthenticated(s)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Código inválido.')
+      setLoading(false)
+    }
+  }
+
   if (pending2fa) {
     return <TwoFactorLoginScreen preAuthToken={pending2fa} onAuthenticated={onAuthenticated} onCancel={() => { setPending2fa(null); setError('') }} />
+  }
+
+  // FEAT-083: etapa de código do cadastro por senha.
+  if (pendingReg) {
+    return (
+      <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
+        <main className="w-full max-w-[360px] flex flex-col items-center">
+          <Icon name="sms" className="text-[44px] text-primary mb-3" />
+          <h1 className="text-[20px] font-bold text-on-surface text-center">Confirme seu WhatsApp</h1>
+          <p className="text-[13px] text-on-surface-variant text-center mb-4">Enviamos um código para {maskPhoneBR(regPhone)}.</p>
+          <form className="w-full flex flex-col gap-3" onSubmit={submitRegisterCode}>
+            <ErrorBanner message={error} />
+            <input autoFocus inputMode="numeric" value={regCode} onChange={(e) => setRegCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
+            <PrimaryButton type="submit" disabled={loading || regCode.length !== 6}>{loading ? 'Criando conta...' : 'Concluir cadastro'}</PrimaryButton>
+            <button type="button" onClick={() => { setPendingReg(null); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar</button>
+          </form>
+        </main>
+      </div>
+    )
   }
 
   if (showOtp) {
@@ -1426,7 +1475,7 @@ function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant
           <ErrorBanner message={error} />
           <div className="space-y-4">
             <FloatingField label="Nome completo" id="name" name="name" type="text" minLength={3} required />
-            <FloatingField label="Telefone (WhatsApp)" id="phone" name="phone" type="tel" inputMode="tel" required />
+            <FloatingField label="Telefone (WhatsApp)" id="phone" name="phone" type="tel" inputMode="tel" value={maskPhoneBR(regPhone)} onChange={(e) => setRegPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} required />
             <FloatingField label="E-mail (opcional)" id="email" name="email" type="email" />
             <div className="relative w-full">
               <FloatingField label="Senha (mínimo 8 caracteres)" id="password" name="password" type={showPassword ? 'text' : 'password'} minLength={8} required />

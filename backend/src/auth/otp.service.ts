@@ -62,29 +62,32 @@ export async function sendOtp(tenantId: string, rawPhone: string) {
   return { message: 'Código enviado com sucesso via WhatsApp.', expiresInSeconds: OTP_TTL_MS / 1000, action: 'OTP_DISPATCHED' };
 }
 
-export async function verifyOtp(tenantId: string, rawPhone: string, code: string, name?: string) {
+// Valida o código contra o store (RN01 replay, FA01 tentativas) e destrói no acerto (V02).
+// Reutilizável por fluxos que não criam usuário aqui (ex.: cadastro via Google — FEAT-083).
+// Retorna o telefone normalizado em E.164.
+export function consumeOtp(tenantId: string, rawPhone: string, code: string): string {
   const phone = normalizeE164(rawPhone);
   const k = key(tenantId, phone);
   const entry = otpStore.get(k);
 
-  // RN01/replay: inexistente ou expirado → 410 (chave já destruída no acerto/expiração).
   if (!entry || entry.expiresAt <= Date.now()) {
     otpStore.delete(k);
     throw new BusinessError('OTP_EXPIRED_OR_NOT_FOUND', 'O código expirou ou não foi encontrado. Solicite um novo.', 410);
   }
-
   if (entry.code !== code) {
     entry.attempts += 1;
-    // FA01: 3 erros → invalida a sessão de OTP.
     if (entry.attempts >= MAX_VERIFY_ATTEMPTS) {
       otpStore.delete(k);
       throw new BusinessError('TOO_MANY_OTP_ATTEMPTS', 'Muitas tentativas falhas. Solicite um novo código.', 401);
     }
     throw new BusinessError('OTP_INVALID', 'Código incorreto.', 401);
   }
+  otpStore.delete(k); // V02: anti-replay
+  return phone;
+}
 
-  // V02: destrói imediatamente após o acerto (anti-replay).
-  otpStore.delete(k);
+export async function verifyOtp(tenantId: string, rawPhone: string, code: string, name?: string) {
+  const phone = consumeOtp(tenantId, rawPhone, code);
 
   // RN04: telefone único por tenant.
   const existing = await prisma.user.findFirst({ where: { tenantId, phone } });

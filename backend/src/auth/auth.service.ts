@@ -8,6 +8,7 @@ import { UserRole } from '../user/user.types';
 import { decryptSecret } from '../common/crypto';
 import { classifyIdentifier } from '../common/phone';
 import { verifyCode } from './twofa.service';
+import { consumeOtp } from './otp.service';
 
 const STAFF_ROLES: UserRole[] = ['BARBER', 'ADMIN', 'DEV'];
 const DEFAULT_TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -186,7 +187,17 @@ export function googleAuthUrl(state: string): string {
 // Troca o authorization code do Google por tokens, valida o ID token e abre sessão.
 // Estratégia de conta: vincula por googleId; senão por e-mail verificado (preservando o
 // papel existente — BARBER/ADMIN continuam staff); senão cria novo CLIENT.
-export async function loginWithGoogle(code: string) {
+// FEAT-083: token intermediário do fluxo Google → WhatsApp (15 min).
+function googlePreAuthToken(d: { googleId: string; email: string; name: string; tenantId: string }): string {
+  const now = Math.floor(Date.now() / 1000);
+  return jwt.sign(
+    { iss: 'razorfy', type: 'GOOGLE_PREAUTH', gid: d.googleId, email: d.email, name: d.name, tnt: d.tenantId, iat: now, exp: now + 900 },
+    config.JWT_SECRET,
+    { algorithm: 'HS256', noTimestamp: true },
+  );
+}
+
+export async function loginWithGoogle(code: string, tenantSlug?: string) {
   const client = getGoogleClient();
 
   let idToken: string | undefined;
@@ -213,26 +224,56 @@ export async function loginWithGoogle(code: string) {
   const email = payload.email.toLowerCase();
   const name = payload.name?.trim() || payload.email.split('@')[0];
 
-  // Fase 1: login social resolve para o tenant default.
-  const tenantId = await resolveActiveTenant();
-  const user = await prisma.$transaction(async tx => {
-    const byGoogle = await tx.user.findFirst({ where: { tenantId, googleId } });
-    if (byGoogle) return byGoogle;
+  const tenantId = await resolveActiveTenant(tenantSlug);
 
-    const byEmail = await tx.user.findFirst({
-      where: { tenantId, email: { equals: email, mode: 'insensitive' } },
-    });
-    if (byEmail) {
-      // Vincula a identidade Google à conta existente, preservando o papel atual.
-      return tx.user.update({ where: { id: byEmail.id }, data: { googleId } });
-    }
+  // Conta existente (por Google ou e-mail) → login/vínculo direto.
+  const byGoogle = await prisma.user.findFirst({ where: { tenantId, googleId } });
+  if (byGoogle) return sessionFor(byGoogle);
 
-    return tx.user.create({
-      data: { name, email, googleId, role: 'CLIENT', tenantId },
-    });
+  const byEmail = await prisma.user.findFirst({
+    where: { tenantId, email: { equals: email, mode: 'insensitive' } },
   });
+  if (byEmail) {
+    const linked = await prisma.user.update({ where: { id: byEmail.id }, data: { googleId } });
+    return sessionFor(linked);
+  }
 
-  return sessionFor(user);
+  // FEAT-083: novo usuário NÃO é criado aqui — exige validação de WhatsApp antes.
+  return {
+    status: 'REQUIRE_WHATSAPP' as const,
+    message: 'Falta validar seu WhatsApp para concluir o cadastro.',
+    preAuthToken: googlePreAuthToken({ googleId, email, name, tenantId }),
+  };
+}
+
+// FEAT-083 Fase B: valida o OTP do WhatsApp + dados do Google e cria/loga o usuário.
+export async function verifyGoogleOtp(preAuthToken: string, rawPhone: string, code: string) {
+  let p: { type?: string; gid?: string; email?: string; name?: string; tnt?: string };
+  try {
+    p = jwt.verify(preAuthToken, config.JWT_SECRET, { algorithms: ['HS256'] }) as typeof p;
+  } catch {
+    throw new BusinessError('PRE_AUTH_EXPIRED', 'Sessão de verificação expirada. Entre com o Google novamente.', 401);
+  }
+  if (p.type !== 'GOOGLE_PREAUTH' || !p.gid || !p.email || !p.tnt) {
+    throw new BusinessError('PRE_AUTH_INVALID', 'Token de verificação inválido.', 401);
+  }
+  const tenantId = p.tnt;
+  const phone = consumeOtp(tenantId, rawPhone, code); // valida + destrói o OTP
+
+  // Telefone já existente no tenant → vincula Google à conta e loga.
+  const byPhone = await prisma.user.findFirst({ where: { tenantId, phone } });
+  if (byPhone) {
+    const linked = await prisma.user.update({
+      where: { id: byPhone.id },
+      data: { googleId: p.gid, isPhoneVerified: true, ...(byPhone.email ? {} : { email: p.email }) },
+    });
+    return sessionFor(linked);
+  }
+
+  const created = await prisma.user.create({
+    data: { name: (p.name ?? p.email.split('@')[0]).trim(), email: p.email, googleId: p.gid, phone, role: 'CLIENT', tenantId, isPhoneVerified: true },
+  });
+  return sessionFor(created);
 }
 
 // Contrato consumido por frontend e mobile: { accessToken, user: { id, name, email, phone, role } }

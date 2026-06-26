@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-25T23:00:00
+last_updated: 2026-06-26T15:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1162,6 +1162,24 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `depends_on`: `FEAT-073`, `FEAT-075`
 - `acceptance`: `/admin/commissions`→404; 5 globais; upload com `<script>`/`onclick`→salvo limpo + "Código inseguro removido"; >50 KB→413; não-SVG→422; custom no list do tenant; serviço com `iconId` renderiza o vetor.
 - `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — commissions 404, 5 globais, sanitização (script/onclick removidos), 422 formato, 413 tamanho, custom no list.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-083 - Cadastro Google em duas fases (validação obrigatória de WhatsApp)
+
+- `status`: `IMPLEMENTED`
+- `area`: `AUTH`
+- `actors`: `CLIENT`, `Google` (OAuth), `WaSenderAPI` (OTP)
+- `description`: Telefone validado por WhatsApp passa a ser requisito para emitir o JWT final — inclusive quando o cliente entra pelo Google. Login Google de **usuário existente** segue direto; **novo usuário** é interceptado: o backend NÃO cria a conta, retorna `202 REQUIRE_WHATSAPP` + `preAuthToken`; o front coleta o telefone (máscara BR), dispara OTP e conclui o cadastro com `verify-google`. E-mail permanece opcional.
+- `business_rules`: máquina de estados em 2 fases. **Fase A** (`POST /auth/google`): por Google/e-mail existente → sessão; novo → `202` + `preAuthToken` (claim `type=GOOGLE_PREAUTH`, 15 min, carrega gid/email/name/tnt). **Fase B** (`POST /auth/otp/verify-google`): Bearer preAuthToken + `{phone, code}` → valida OTP, cria/loga CLIENT com telefone verificado e googleId. Telefone já existente no tenant → vincula o Google à conta. Sanitização: máscara `99 9 9999-9999` no front; backend faz `replace(/\D/g)` + prefixo `+55` (E.164). Reaproveita rate-limit de OTP (3/h).
+- `api`: `POST /auth/google` `{code, tenantSlug?}` → 200 sessão **ou** `202 {status:'REQUIRE_WHATSAPP', preAuthToken}`. `POST /auth/otp/verify-google` (Bearer preAuthToken, `{phone, code}`) → JWT final. Envio de OTP reutiliza `POST /tenants/:tenantId/auth/otp/send`. Tokens `GOOGLE_PREAUTH`/`PRE_AUTH` são barrados em rotas normais (`PRE_AUTH_NOT_ALLOWED 401`).
+- `refactor`: `otp.service` expõe `consumeOtp(tenantId, phone, code)` (valida+destrói o OTP, anti-replay) reutilizado por `verifyOtp` e pelo fluxo Google.
+- `frontend`: web — callback Google trata `202`, renderiza `GoogleWhatsappScreen` (telefone com máscara → OTP → "Concluir cadastro"); `/auth/google` passa `tenantSlug` do tenant conectado.
+- `database`: sem migração — `email` já opcional (FEAT-077), `google_id`/`is_phone_verified` já existentes. **Nota:** `phone NOT NULL` global não foi aplicado para não quebrar contas `DEV`/staff sem telefone; a obrigatoriedade é garantida no fluxo de cadastro de cliente.
+- `api_compatibility`: `COMPATIBLE` (login Google de conta existente inalterado; `202` é aditivo). Clientes antigos sem a tela de WhatsApp não concluem cadastro Google novo — esperado.
+- `depends_on`: `FEAT-077`, `FEAT-078`
+- `acceptance`: Google novo → 202 + preAuthToken; verify-google com OTP correto → cria CLIENT (nome/email do Google + telefone verificado + googleId); máscara `62 9 8888-7777` → `+5562988887777`; preAuthToken barrado em rota normal; login por senha nesse telefone → `USE_GOOGLE_LOGIN`.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — send OTP, `verify-google` (token GOOGLE_PREAUTH forjado) cria CLIENT com telefone normalizado, `PRE_AUTH_NOT_ALLOWED` em `/users/me`, login por telefone → `USE_GOOGLE_LOGIN`.
 - `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 

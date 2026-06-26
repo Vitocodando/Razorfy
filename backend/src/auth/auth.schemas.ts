@@ -16,6 +16,13 @@ export const LoginSchema = z.object({
 
 export const GoogleAuthSchema = z.object({
   code: z.string().min(1),
+  tenantSlug: z.string().max(50).optional(),
+});
+
+// FEAT-083: fecha o cadastro Google com o OTP do WhatsApp.
+export const VerifyGoogleOtpSchema = z.object({
+  phone: z.string().min(8).max(20),
+  code: z.string().regex(/^\d{6}$/, 'O código deve ter exatamente 6 dígitos.'),
 });
 
 // V01: código TOTP de login — 6 dígitos numéricos.

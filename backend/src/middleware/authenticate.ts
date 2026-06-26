@@ -56,9 +56,9 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   try {
     const token = header.slice(7);
     const payload = jwt.verify(token, config.JWT_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
-    // V02: token de pré-autenticação (2FA) nunca acessa rotas normais.
-    if (payload.type === 'PRE_AUTH') {
-      res.status(401).json({ timestamp: new Date().toISOString(), status: 401, code: 'PRE_AUTH_NOT_ALLOWED', message: 'Conclua a verificação em duas etapas.', path: req.path });
+    // V02: tokens de pré-autenticação (2FA, Google→WhatsApp) nunca acessam rotas normais.
+    if (payload.type) {
+      res.status(401).json({ timestamp: new Date().toISOString(), status: 401, code: 'PRE_AUTH_NOT_ALLOWED', message: 'Conclua a verificação pendente.', path: req.path });
       return;
     }
     const base = { id: payload.sub, role: payload.roles[0] as AuthUser['role'], name: payload.name };

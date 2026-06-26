@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { RegisterSchema, LoginSchema, GoogleAuthSchema, Verify2faSchema } from './auth.schemas';
-import { register, login, loginWithGoogle, googleAuthUrl, consumePreAuthToken, verifyLogin2fa } from './auth.service';
+import { RegisterSchema, LoginSchema, GoogleAuthSchema, Verify2faSchema, VerifyGoogleOtpSchema } from './auth.schemas';
+import { register, login, loginWithGoogle, googleAuthUrl, consumePreAuthToken, verifyLogin2fa, verifyGoogleOtp } from './auth.service';
 import { asyncHandler } from '../common/asyncHandler';
 import { BusinessError } from '../common/BusinessError';
 import { googleOAuthEnabled } from '../config';
@@ -52,7 +52,22 @@ authRouter.get('/google/url', asyncHandler(async (req, res) => {
 
 // Troca o authorization code por uma sessão Razorfy.
 authRouter.post('/google', asyncHandler(async (req, res) => {
-  const { code } = GoogleAuthSchema.parse(req.body);
-  const result = await loginWithGoogle(code);
+  const { code, tenantSlug } = GoogleAuthSchema.parse(req.body);
+  const result = await loginWithGoogle(code, tenantSlug);
+  // FEAT-083: novo usuário → 202 pedindo validação de WhatsApp; senão 200 com a sessão.
+  if ('status' in result && result.status === 'REQUIRE_WHATSAPP') {
+    res.status(202).json(result);
+    return;
+  }
   res.json(result);
+}));
+
+// FEAT-083 Fase B: fecha o cadastro Google com o OTP do WhatsApp.
+authRouter.post('/otp/verify-google', asyncHandler(async (req, res) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith('Bearer ')) {
+    throw new BusinessError('PRE_AUTH_INVALID', 'Token de verificação não fornecido.', 401);
+  }
+  const { phone, code } = VerifyGoogleOtpSchema.parse(req.body);
+  res.json(await verifyGoogleOtp(header.slice(7), phone, code));
 }));

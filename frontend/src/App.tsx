@@ -595,6 +595,7 @@ function App() {
     const isCallback = window.location.pathname.includes('/auth/google/callback')
     return { exchanging: isCallback && params.has('code'), error: '' }
   })
+  const [googleWhatsapp, setGoogleWhatsapp] = useState<string | null>(null) // FEAT-083: preAuthToken
 
   useEffect(() => {
     if (!window.location.pathname.includes('/auth/google/callback')) return
@@ -613,8 +614,16 @@ function App() {
       queueMicrotask(() => setOauth({ exchanging: false, error: 'Sessão de login inválida. Tente novamente.' }))
       return
     }
-    request<Session>('/auth/google', { method: 'POST', body: JSON.stringify({ code }) })
-      .then((s) => { signIn(s); setOauth({ exchanging: false, error: '' }) })
+    request<Session | { status: 'REQUIRE_WHATSAPP'; preAuthToken: string }>('/auth/google', { method: 'POST', body: JSON.stringify({ code, tenantSlug: tenant?.slug }) })
+      .then((r) => {
+        // FEAT-083: novo usuário Google → falta validar WhatsApp.
+        if ('status' in r && r.status === 'REQUIRE_WHATSAPP') {
+          setGoogleWhatsapp(r.preAuthToken)
+          setOauth({ exchanging: false, error: '' })
+          return
+        }
+        signIn(r as Session); setOauth({ exchanging: false, error: '' })
+      })
       .catch((e) => setOauth({ exchanging: false, error: e instanceof Error ? e.message : 'Falha no login com Google.' }))
   }, [])
 
@@ -624,6 +633,18 @@ function App() {
         <Icon name="progress_activity" className="text-[40px] text-primary animate-spin" />
         <p className="text-[16px] text-on-surface-variant">Entrando com Google...</p>
       </div>
+    )
+  }
+
+  // FEAT-083: novo usuário Google precisa validar o WhatsApp antes de concluir o cadastro.
+  if (googleWhatsapp && tenant) {
+    return (
+      <GoogleWhatsappScreen
+        preAuthToken={googleWhatsapp}
+        tenantId={tenant.id}
+        onAuthenticated={(s) => { setGoogleWhatsapp(null); signIn(s) }}
+        onCancel={() => setGoogleWhatsapp(null)}
+      />
     )
   }
 
@@ -1200,6 +1221,75 @@ function PhoneOtpScreen({ tenantId, onAuthenticated, onCancel }: {
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (se for seu primeiro acesso)" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
             <PrimaryButton type="submit" disabled={loading || code.length !== 6}>{loading ? 'Verificando...' : 'Verificar'}</PrimaryButton>
             <button type="button" onClick={() => { setStage('phone'); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Reenviar / trocar número</button>
+          </form>
+        )}
+      </main>
+    </div>
+  )
+}
+
+// FEAT-083: máscara BR 99 9 9999-9999 a partir de dígitos crus (DDD+9+8).
+function maskPhoneBR(digits: string): string {
+  const d = digits.replace(/\D/g, '').slice(0, 11)
+  if (d.length <= 2) return d
+  if (d.length <= 3) return `${d.slice(0, 2)} ${d.slice(2)}`
+  if (d.length <= 7) return `${d.slice(0, 2)} ${d.slice(2, 3)} ${d.slice(3)}`
+  return `${d.slice(0, 2)} ${d.slice(2, 3)} ${d.slice(3, 7)}-${d.slice(7)}`
+}
+
+// FEAT-083: novo usuário Google valida WhatsApp (telefone → OTP → conclui cadastro).
+function GoogleWhatsappScreen({ preAuthToken, tenantId, onAuthenticated, onCancel }: {
+  preAuthToken: string
+  tenantId: string
+  onAuthenticated: (session: Session) => void
+  onCancel: () => void
+}) {
+  const [stage, setStage] = useState<'phone' | 'code'>('phone')
+  const [digits, setDigits] = useState('')
+  const [code, setCode] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function send(e: FormEvent) {
+    e.preventDefault()
+    if (digits.length !== 11) { setError('Informe o WhatsApp completo (DDD + número).'); return }
+    setLoading(true); setError('')
+    try {
+      await request(`/tenants/${tenantId}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone: digits }) })
+      setStage('code'); setCode('')
+    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível enviar o código.') }
+    finally { setLoading(false) }
+  }
+  async function verify(e: FormEvent) {
+    e.preventDefault()
+    setLoading(true); setError('')
+    try {
+      const s = await request<Session>('/auth/otp/verify-google', { method: 'POST', body: JSON.stringify({ phone: digits, code }) }, preAuthToken)
+      onAuthenticated(s)
+    } catch (c) { setError(c instanceof Error ? c.message : 'Código inválido.'); setLoading(false) }
+  }
+
+  return (
+    <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
+      <main className="w-full max-w-[360px] flex flex-col items-center">
+        <Icon name="sms" className="text-[44px] text-primary mb-3" />
+        {stage === 'phone' ? (
+          <form className="w-full flex flex-col gap-3" onSubmit={send}>
+            <h1 className="text-[20px] font-bold text-on-surface text-center">Falta pouco!</h1>
+            <p className="text-[13px] text-on-surface-variant text-center mb-1">Qual o seu WhatsApp? Enviaremos um código para confirmar.</p>
+            <ErrorBanner message={error} />
+            <input autoFocus inputMode="numeric" value={maskPhoneBR(digits)} onChange={(e) => setDigits(e.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="62 9 8888-7777" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
+            <PrimaryButton type="submit" disabled={loading || digits.length !== 11}>{loading ? 'Enviando...' : 'Enviar código'}</PrimaryButton>
+            <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Cancelar</button>
+          </form>
+        ) : (
+          <form className="w-full flex flex-col gap-3" onSubmit={verify}>
+            <h1 className="text-[20px] font-bold text-on-surface text-center">Digite o código</h1>
+            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviado para {maskPhoneBR(digits)} via WhatsApp.</p>
+            <ErrorBanner message={error} />
+            <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
+            <PrimaryButton type="submit" disabled={loading || code.length !== 6}>{loading ? 'Verificando...' : 'Concluir cadastro'}</PrimaryButton>
+            <button type="button" onClick={() => { setStage('phone'); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Trocar número</button>
           </form>
         )}
       </main>

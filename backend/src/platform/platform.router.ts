@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { authenticate } from '../middleware/authenticate';
 import { requireDev } from './platform.middleware';
 import { asyncHandler } from '../common/asyncHandler';
-import { CreateTenantSchema, ListTenantsQuery, TenantStatusSchema } from './platform.schemas';
-import { createTenant, listTenants, setTenantStatus } from './platform.service';
+import { CreateTenantSchema, ListTenantsQuery, TenantStatusSchema, PageQuery, SearchUsersQuery, UpdateUserSchema } from './platform.schemas';
+import { createTenant, listTenants, setTenantStatus, listTenantUsers, searchUsers, updateUser, forcePasswordReset } from './platform.service';
 
 // Backoffice mestre (FEAT-075): /api/v1/platform/* — exclusivo role DEV.
 export const platformRouter = Router();
@@ -30,4 +30,27 @@ platformRouter.patch('/tenants/:tenantId/status', asyncHandler(async (req, res) 
   const tenantId = UuidParam.parse(req.params.tenantId);
   const { isActive } = TenantStatusSchema.parse(req.body);
   res.json(await setTenantStatus(tenantId, isActive));
+}));
+
+// FEAT-084: gestão global de usuários.
+platformRouter.get('/tenants/:tenantId/users', asyncHandler(async (req, res) => {
+  const tenantId = UuidParam.parse(req.params.tenantId);
+  const { page, size } = PageQuery.parse(req.query);
+  res.json(await listTenantUsers(tenantId, page, size));
+}));
+
+platformRouter.get('/users/search', asyncHandler(async (req, res) => {
+  const { q } = SearchUsersQuery.parse(req.query);
+  res.json(await searchUsers(q));
+}));
+
+platformRouter.put('/users/:userId', asyncHandler(async (req, res) => {
+  const userId = UuidParam.parse(req.params.userId);
+  const body = UpdateUserSchema.parse(req.body);
+  res.json(await updateUser(userId, body));
+}));
+
+platformRouter.post('/users/:userId/force-password-reset', asyncHandler(async (req, res) => {
+  const userId = UuidParam.parse(req.params.userId);
+  res.json(await forcePasswordReset(userId));
 }));

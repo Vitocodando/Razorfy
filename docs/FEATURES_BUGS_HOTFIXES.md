@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-26T17:00:00
+last_updated: 2026-06-26T18:30:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1180,6 +1180,22 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `depends_on`: `FEAT-077`, `FEAT-078`
 - `acceptance`: Google novo → 202 + preAuthToken; verify-google com OTP correto → cria CLIENT (nome/email do Google + telefone verificado + googleId); máscara `62 9 8888-7777` → `+5562988887777`; preAuthToken barrado em rota normal; login por senha nesse telefone → `USE_GOOGLE_LOGIN`.
 - `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — send OTP, `verify-google` (token GOOGLE_PREAUTH forjado) cria CLIENT com telefone normalizado, `PRE_AUTH_NOT_ALLOWED` em `/users/me`, login por telefone → `USE_GOOGLE_LOGIN`.
+- `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-084 - Gestão global de usuários (Backoffice DEV)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `DEV`
+- `description`: Painel no Backoffice Mestre (role DEV) para gerir todos os usuários do ecossistema, agrupados por barbearia: listar usuários de um tenant (paginado), busca global inter-tenant por nome/telefone, atualização administrativa de perfil (nome, WhatsApp, e-mail, cargo, status) e reset de senha forçado. Suporte técnico N3 sem `UPDATE` manual no banco.
+- `business_rules`: **RN01** — rotas `/platform/*` exigem role `DEV` (ignora isolamento de tenant). **RN02** — telefone sanitizado para E.164 antes de persistir. **RN03/CT01** — proibido promover para `DEV` por este endpoint → `400 ROLE_DEV_FORBIDDEN` ("A role DEV só pode ser atribuída via infraestrutura central da plataforma."); cargos editáveis = CLIENT/BARBER/ADMIN; usuário DEV não é editável aqui (`403`). **RN04** — reset gera senha temporária aleatória de 8 caracteres, grava o hash BCrypt e exibe em texto plano **uma vez**. **V01** — conflito de telefone no MESMO tenant → `422 PHONE_ALREADY_EXISTS`. **Não inclui** ver senha em texto plano nem transferir usuário entre tenants.
+- `api`: `GET /platform/tenants/:tenantId/users?page&size` → `{tenantName, content[], totalPages, totalElements}` (cada item com `formattedPhone`); `GET /platform/users/search?q=` (global, expõe `tenantId`/`tenantName` por registro — CT02); `PUT /platform/users/:userId` `{name, phone, email?, role, isActive}` → `{...,status:'UPDATED_BY_PLATFORM_ADMIN'}`; `POST /platform/users/:userId/force-password-reset` → `{temporaryPassword, message}`.
+- `frontend`: `PlatformConsole` ganha abas **Barbearias** / **Usuários**; `PlatformUsersPanel` (dropdown de tenant + tabela + busca global) e `PlatformUserEditModal` (form com máscara BR + select de cargo + status); modal de reset exibe a senha temporária uma vez.
+- `api_compatibility`: `COMPATIBLE` (endpoints novos sob `/platform`).
+- `depends_on`: `FEAT-075`, `FEAT-083`
+- `acceptance`: listar usuários do tenant com telefone formatado; CT01 role=DEV → 400 com a mensagem exata; update corrige telefone (normaliza E.164); reset retorna senha de 8 chars; busca global acha usuário em múltiplos tenants; V01 telefone duplicado no tenant → 422.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — list (31 usuários, formattedPhone), CT01 `ROLE_DEV_FORBIDDEN`, update→E.164 + `UPDATED_BY_PLATFORM_ADMIN`, reset (8 chars), search inter-tenant, V01 `PHONE_ALREADY_EXISTS`.
 - `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 

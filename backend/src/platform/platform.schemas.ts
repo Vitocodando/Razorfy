@@ -23,4 +23,23 @@ export const TenantStatusSchema = z.object({
   isActive: z.boolean(),
 });
 
+// FEAT-084: gestão global de usuários.
+export const PageQuery = z.object({
+  page: z.coerce.number().int().min(0).default(0),
+  size: z.coerce.number().int().min(1).max(100).default(10),
+});
+
+export const SearchUsersQuery = z.object({
+  q: z.string().trim().min(2).max(100),
+});
+
+export const UpdateUserSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  phone: z.string().trim().min(8).max(20),
+  email: z.string().trim().email().max(150).optional().or(z.literal('')),
+  role: z.string().min(1).max(20),
+  isActive: z.boolean(),
+});
+
 export type CreateTenantInput = z.infer<typeof CreateTenantSchema>;
+export type UpdateUserInput = z.infer<typeof UpdateUserSchema>;

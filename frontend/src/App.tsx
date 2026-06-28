@@ -739,6 +739,10 @@ type PlatformTenant = {
 }
 type PlatformList = { content: PlatformTenant[]; totalPages: number; totalElements: number }
 
+// FEAT-084: gestão global de usuários (DEV).
+type PlatformUser = { userId: string; name: string; phone: string | null; formattedPhone: string | null; email: string | null; role: string; isActive: boolean; tenantName?: string | null }
+type PlatformUserList = { tenantName: string; content: PlatformUser[]; totalPages: number; totalElements: number }
+
 // Login restrito do proprietário da plataforma (sem seleção de barbearia).
 function DevLoginScreen({ onAuthenticated }: { onAuthenticated: (s: Session) => void }) {
   const [email, setEmail] = useState('')
@@ -796,6 +800,7 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [view, setView] = useState<'tenants' | 'users'>('tenants') // FEAT-084
   const size = 20
 
   const load = (p = page) => {
@@ -837,6 +842,15 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
         {error && <ErrorBanner message={error} />}
         {success && <div className="rounded-lg bg-primary/15 border border-primary/30 text-primary px-4 py-2 text-[13px]">{success}</div>}
 
+        <div className="flex items-center gap-2">
+          {([['tenants', 'Barbearias'], ['users', 'Usuários']] as const).map(([k, label]) => (
+            <button key={k} onClick={() => setView(k)} className={`h-9 px-4 rounded-lg text-[13px] font-semibold border transition-colors ${view === k ? 'bg-primary text-on-primary border-primary' : 'bg-white/5 text-white/60 border-white/10 hover:text-white'}`}>{label}</button>
+          ))}
+        </div>
+
+        {view === 'users' && <PlatformUsersPanel token={token} tenants={data?.content ?? []} />}
+
+        {view === 'tenants' && (<>
         <div className="flex items-center justify-between">
           <h1 className="text-[18px] font-bold">Barbearias (Tenants)</h1>
           <button onClick={() => setShowForm((v) => !v)} className="h-10 px-4 rounded-lg bg-primary text-on-primary font-bold text-[13px] inline-flex items-center gap-2">
@@ -888,6 +902,7 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
             <button disabled={page + 1 >= data.totalPages} onClick={() => setPage((p) => p + 1)} className="h-9 px-3 rounded-lg bg-white/5 text-[13px] disabled:opacity-30">Próxima</button>
           </div>
         )}
+        </>)}
       </main>
     </div>
   )
@@ -937,6 +952,181 @@ function PlatformCreateForm({ token, onCreated }: { token: string; onCreated: (m
         {busy ? <Icon name="progress_activity" className="animate-spin text-[18px]" /> : <><Icon name="add_business" className="text-[18px]" />Criar barbearia + admin</>}
       </button>
     </form>
+  )
+}
+
+// FEAT-084: gestão global de usuários (lista por tenant, busca global, editar, reset de senha).
+function PlatformUsersPanel({ token, tenants }: { token: string; tenants: PlatformTenant[] }) {
+  const [tenantId, setTenantId] = useState(tenants[0]?.tenantId ?? '')
+  const [data, setData] = useState<PlatformUserList | null>(null)
+  const [searchResults, setSearchResults] = useState<PlatformUser[] | null>(null)
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [editing, setEditing] = useState<PlatformUser | null>(null)
+  const [resetUser, setResetUser] = useState<PlatformUser | null>(null)
+  const [tempPassword, setTempPassword] = useState('')
+
+  useEffect(() => { if (!tenantId && tenants[0]) setTenantId(tenants[0].tenantId) }, [tenants, tenantId])
+
+  const load = (tid = tenantId, p = page) => {
+    if (!tid) return
+    setLoading(true); setError('')
+    request<PlatformUserList>(`/platform/tenants/${tid}/users?page=${p}&size=10`, {}, token)
+      .then(setData)
+      .catch((c) => setError(c instanceof Error ? c.message : 'Falha ao carregar usuários.'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { if (!searchResults) load(tenantId, page); /* eslint-disable-next-line */ }, [tenantId, page])
+
+  async function runSearch(e: FormEvent) {
+    e.preventDefault()
+    if (query.trim().length < 2) { setSearchResults(null); return }
+    setLoading(true); setError('')
+    try { setSearchResults(await request<PlatformUser[]>(`/platform/users/search?q=${encodeURIComponent(query.trim())}`, {}, token)) }
+    catch (c) { setError(c instanceof Error ? c.message : 'Falha na busca.') }
+    finally { setLoading(false) }
+  }
+
+  async function doReset() {
+    if (!resetUser) return
+    setError('')
+    try {
+      const r = await request<{ temporaryPassword: string }>(`/platform/users/${resetUser.userId}/force-password-reset`, { method: 'POST' }, token)
+      setTempPassword(r.temporaryPassword)
+    } catch (c) { setError(c instanceof Error ? c.message : 'Falha ao resetar.'); setResetUser(null) }
+  }
+
+  const rows = searchResults ?? data?.content ?? []
+  const roleBadge: Record<string, string> = { ADMIN: 'bg-amber-500/20 text-amber-300', BARBER: 'bg-blue-500/20 text-blue-300', CLIENT: 'bg-white/10 text-white/60' }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {error && <ErrorBanner message={error} />}
+      {success && <div className="rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 px-4 py-2 text-[13px]">{success}</div>}
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <select value={tenantId} onChange={(e) => { setSearchResults(null); setQuery(''); setPage(0); setTenantId(e.target.value) }} className="h-10 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] flex-1">
+          {tenants.map((t) => <option key={t.tenantId} value={t.tenantId} className="bg-[#0b0b0f]">{t.name}</option>)}
+        </select>
+        <form onSubmit={runSearch} className="flex gap-2 flex-1">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Busca global (nome ou telefone)" className="h-10 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] flex-1 placeholder:text-white/30" />
+          <button className="h-10 px-3 rounded-lg bg-white/10 text-[13px]">Buscar</button>
+          {searchResults && <button type="button" onClick={() => { setSearchResults(null); setQuery('') }} className="h-10 px-3 rounded-lg bg-white/5 text-[13px] text-white/60">Limpar</button>}
+        </form>
+      </div>
+
+      {loading ? (
+        <div className="flex flex-col gap-2">{[1, 2, 3].map((i) => <div key={i} className="h-14 bg-white/5 rounded-lg animate-pulse" />)}</div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {rows.map((u) => (
+            <div key={u.userId} className="flex items-center gap-3 p-3 rounded-lg bg-white/5 border border-white/10">
+              <div className={`w-2 h-2 rounded-full shrink-0 ${u.isActive ? 'bg-emerald-400' : 'bg-red-500'}`} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-[13px] truncate">{u.name}</p>
+                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${roleBadge[u.role] ?? 'bg-white/10'}`}>{u.role}</span>
+                  {searchResults && u.tenantName && <span className="text-[10px] text-white/40">@ {u.tenantName}</span>}
+                </div>
+                <p className="text-[11px] text-white/40 truncate">{u.formattedPhone ?? '—'}{u.email ? ` · ${u.email}` : ''}</p>
+              </div>
+              <button onClick={() => setEditing(u)} className="h-8 px-2.5 rounded-lg text-[12px] border border-white/15 text-white/80 hover:bg-white/10">Editar</button>
+              <button onClick={() => { setResetUser(u); setTempPassword('') }} className="h-8 px-2.5 rounded-lg text-[12px] border border-amber-500/40 text-amber-300 hover:bg-amber-500/10">Resetar senha</button>
+            </div>
+          ))}
+          {rows.length === 0 && <p className="text-white/40 text-[13px] text-center py-8">Nenhum usuário.</p>}
+        </div>
+      )}
+
+      {!searchResults && data && data.totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 pt-1">
+          <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="h-8 px-3 rounded-lg bg-white/5 text-[12px] disabled:opacity-30">Anterior</button>
+          <span className="text-[12px] text-white/50">Página {page + 1} de {data.totalPages}</span>
+          <button disabled={page + 1 >= data.totalPages} onClick={() => setPage((p) => p + 1)} className="h-8 px-3 rounded-lg bg-white/5 text-[12px] disabled:opacity-30">Próxima</button>
+        </div>
+      )}
+
+      {editing && (
+        <PlatformUserEditModal
+          token={token}
+          user={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); setSuccess('Usuário atualizado.'); if (searchResults) runSearchAgain(); else load() }}
+        />
+      )}
+
+      {resetUser && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={() => setResetUser(null)}>
+          <div className="bg-[#16161c] border border-white/10 rounded-2xl p-5 w-full max-w-[380px]" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-[15px] font-bold mb-2">Resetar senha</h3>
+            {tempPassword ? (
+              <>
+                <p className="text-[12px] text-white/60 mb-2">Senha temporária de <b>{resetUser.name}</b> (anote — exibida só uma vez):</p>
+                <code className="block text-[18px] font-mono text-center bg-white/10 rounded-lg py-3 mb-3 tracking-wider">{tempPassword}</code>
+                <button onClick={() => { setResetUser(null); setTempPassword('') }} className="w-full h-10 rounded-lg bg-primary text-on-primary text-[13px] font-bold">Fechar</button>
+              </>
+            ) : (
+              <>
+                <p className="text-[12px] text-white/60 mb-4">Gerar nova senha temporária para <b>{resetUser.name}</b>? A senha atual será invalidada.</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setResetUser(null)} className="flex-1 h-10 rounded-lg border border-white/15 text-[13px] text-white/70">Cancelar</button>
+                  <button onClick={doReset} className="flex-1 h-10 rounded-lg bg-amber-500 text-black text-[13px] font-bold">Resetar</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  function runSearchAgain() {
+    request<PlatformUser[]>(`/platform/users/search?q=${encodeURIComponent(query.trim())}`, {}, token).then(setSearchResults).catch(() => {})
+  }
+}
+
+function PlatformUserEditModal({ token, user, onClose, onSaved }: { token: string; user: PlatformUser; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ name: user.name, phone: (user.phone ?? '').replace(/\D/g, '').replace(/^55/, ''), email: user.email ?? '', role: user.role, isActive: user.isActive })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function save() {
+    setBusy(true); setError('')
+    try {
+      await request(`/platform/users/${user.userId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: f.name.trim(), phone: f.phone, email: f.email.trim() || undefined, role: f.role, isActive: f.isActive }),
+      }, token)
+      onSaved()
+    } catch (c) { setError(c instanceof Error ? c.message : 'Falha ao salvar.'); setBusy(false) }
+  }
+
+  const input = 'h-11 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] w-full placeholder:text-white/30 focus:outline-none focus:border-primary'
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-[#16161c] border border-white/10 rounded-2xl p-5 w-full max-w-[400px] flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-[15px] font-bold">Editar usuário</h3>
+        {error && <ErrorBanner message={error} />}
+        <label className="text-[11px] text-white/50">Nome<input className={input} value={f.name} onChange={(e) => setF((p) => ({ ...p, name: e.target.value }))} /></label>
+        <label className="text-[11px] text-white/50">WhatsApp<input className={input} value={maskPhoneBR(f.phone)} onChange={(e) => setF((p) => ({ ...p, phone: e.target.value.replace(/\D/g, '').slice(0, 11) }))} /></label>
+        <label className="text-[11px] text-white/50">E-mail<input className={input} type="email" value={f.email} onChange={(e) => setF((p) => ({ ...p, email: e.target.value }))} /></label>
+        <label className="text-[11px] text-white/50">Cargo
+          <select className={input} value={f.role} onChange={(e) => setF((p) => ({ ...p, role: e.target.value }))}>
+            <option value="CLIENT" className="bg-[#0b0b0f]">CLIENT</option>
+            <option value="BARBER" className="bg-[#0b0b0f]">BARBER</option>
+            <option value="ADMIN" className="bg-[#0b0b0f]">ADMIN</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-[13px] text-white/80"><input type="checkbox" checked={f.isActive} onChange={(e) => setF((p) => ({ ...p, isActive: e.target.checked }))} /> Ativo</label>
+        <div className="flex gap-2 mt-1">
+          <button onClick={onClose} className="flex-1 h-10 rounded-lg border border-white/15 text-[13px] text-white/70">Cancelar</button>
+          <button onClick={save} disabled={busy} className="flex-1 h-10 rounded-lg bg-primary text-on-primary text-[13px] font-bold disabled:opacity-50">Salvar</button>
+        </div>
+      </div>
+    </div>
   )
 }
 

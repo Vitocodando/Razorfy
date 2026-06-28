@@ -12,6 +12,16 @@ export function normalizeE164(raw: string): string {
   return '+' + digits;
 }
 
+// Máscara BR 99 9 9999-9999 a partir de E.164/dígitos (FEAT-084, exibição).
+export function formatPhoneBR(e164: string | null): string | null {
+  if (!e164) return null;
+  let d = e164.replace(/\D/g, '');
+  if (d.startsWith('55') && d.length > 11) d = d.slice(2); // tira DDI para exibir
+  if (d.length < 10) return e164;
+  if (d.length === 10) return `${d.slice(0, 2)} ${d.slice(2, 6)}-${d.slice(6)}`;
+  return `${d.slice(0, 2)} ${d.slice(2, 3)} ${d.slice(3, 7)}-${d.slice(7)}`;
+}
+
 // Classifica um identificador como e-mail ou telefone (login/registro — FEAT-078).
 export function classifyIdentifier(identifier: string): { email?: string; phone?: string } {
   const t = identifier.trim();

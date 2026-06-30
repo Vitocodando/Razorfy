@@ -801,6 +801,7 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
   const [success, setSuccess] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [view, setView] = useState<'tenants' | 'users'>('tenants') // FEAT-084
+  const [deleteTarget, setDeleteTarget] = useState<PlatformTenant | null>(null) // FEAT-085
   const size = 20
 
   const load = (p = page) => {
@@ -889,6 +890,9 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
                   <Icon name={t.isActive ? 'block' : 'check_circle'} className="text-[16px]" />
                   {t.isActive ? 'Bloquear' : 'Reativar'}
                 </button>
+                <button onClick={() => setDeleteTarget(t)} title="Excluir permanentemente" className="h-9 px-2.5 rounded-lg border border-red-600/50 text-red-500 hover:bg-red-600/15">
+                  <Icon name="delete_forever" className="text-[18px]" />
+                </button>
               </div>
             ))}
             {data && data.content.length === 0 && <p className="text-white/40 text-[13px] text-center py-8">Nenhuma barbearia cadastrada.</p>}
@@ -903,7 +907,51 @@ function PlatformConsole({ session, onSignOut }: { session: Session; onSignOut: 
           </div>
         )}
         </>)}
+
+        {deleteTarget && (
+          <DeleteTenantModal
+            token={token}
+            tenant={deleteTarget}
+            onClose={() => setDeleteTarget(null)}
+            onDeleted={() => { const n = deleteTarget.name; setDeleteTarget(null); setSuccess(`Barbearia "${n}" excluída permanentemente.`); load(0) }}
+          />
+        )}
       </main>
+    </div>
+  )
+}
+
+// FEAT-085: modal de exclusão permanente — exige código 2FA do DEV (header X-DEV-2FA).
+function DeleteTenantModal({ token, tenant, onClose, onDeleted }: { token: string; tenant: PlatformTenant; onClose: () => void; onDeleted: () => void }) {
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function confirm() {
+    if (code.length !== 6) return
+    setBusy(true); setError('')
+    try {
+      await request(`/platform/tenants/${tenant.tenantId}`, { method: 'DELETE', headers: { 'X-DEV-2FA': code } }, token)
+      onDeleted()
+    } catch (c) { setError(c instanceof Error ? c.message : 'Falha ao excluir.'); setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50" onClick={onClose}>
+      <div className="bg-[#1a0e0e] border-2 border-red-600/60 rounded-2xl p-5 w-full max-w-[400px] flex flex-col gap-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-2 text-red-400">
+          <Icon name="warning" filled className="text-[24px]" />
+          <h3 className="text-[16px] font-bold">Exclusão permanente</h3>
+        </div>
+        <p className="text-[13px] text-white/80">Você vai apagar <b>{tenant.name}</b> e <b>TODOS</b> os seus dados (clientes, agendamentos, financeiro). <span className="text-red-400 font-semibold">Esta ação é irreversível.</span></p>
+        <p className="text-[12px] text-white/50">Digite o código de 6 dígitos do seu app de autenticação para confirmar.</p>
+        {error && <ErrorBanner message={error} />}
+        <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-white/5 border border-red-600/40 text-[24px] tracking-[0.4em] font-bold text-center text-white focus:outline-none focus:border-red-500" />
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 h-11 rounded-lg border border-white/15 text-[13px] text-white/70">Cancelar</button>
+          <button onClick={confirm} disabled={busy || code.length !== 6} className="flex-1 h-11 rounded-lg bg-red-600 text-white text-[13px] font-bold disabled:opacity-40">{busy ? 'Excluindo...' : 'Excluir para sempre'}</button>
+        </div>
+      </div>
     </div>
   )
 }

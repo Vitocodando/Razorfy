@@ -4,7 +4,8 @@ import { authenticate } from '../middleware/authenticate';
 import { requireDev } from './platform.middleware';
 import { asyncHandler } from '../common/asyncHandler';
 import { CreateTenantSchema, ListTenantsQuery, TenantStatusSchema, PageQuery, SearchUsersQuery, UpdateUserSchema } from './platform.schemas';
-import { createTenant, listTenants, setTenantStatus, listTenantUsers, searchUsers, updateUser, forcePasswordReset } from './platform.service';
+import { createTenant, listTenants, setTenantStatus, listTenantUsers, searchUsers, updateUser, forcePasswordReset, deleteTenant } from './platform.service';
+import { BusinessError } from '../common/BusinessError';
 
 // Backoffice mestre (FEAT-075): /api/v1/platform/* — exclusivo role DEV.
 export const platformRouter = Router();
@@ -53,4 +54,17 @@ platformRouter.put('/users/:userId', asyncHandler(async (req, res) => {
 platformRouter.post('/users/:userId/force-password-reset', asyncHandler(async (req, res) => {
   const userId = UuidParam.parse(req.params.userId);
   res.json(await forcePasswordReset(userId));
+}));
+
+// FEAT-085: exclusão permanente de tenant, exige código 2FA do DEV no header X-DEV-2FA.
+platformRouter.delete('/tenants/:tenantId', asyncHandler(async (req, res) => {
+  const tenantId = UuidParam.parse(req.params.tenantId);
+  const code = req.header('X-DEV-2FA');
+  // V01: header presente, numérico, 6 dígitos — validado antes de tocar o banco.
+  if (!code || !/^\d{6}$/.test(code)) {
+    throw new BusinessError('INVALID_DEV_2FA_CODE', 'Informe o código de 6 dígitos do seu app de autenticação no header X-DEV-2FA.', 401);
+  }
+  const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  await deleteTenant(req.user!.id, tenantId, code, ip);
+  res.status(204).end();
 }));

@@ -5,6 +5,8 @@ import { prisma } from '../prisma';
 import { BusinessError } from '../common/BusinessError';
 import { invalidateTenantActiveCache } from '../middleware/authenticate';
 import { normalizeE164, formatPhoneBR } from '../common/phone';
+import { decryptSecret } from '../common/crypto';
+import { verifyCode } from '../auth/twofa.service';
 import type { CreateTenantInput, UpdateUserInput } from './platform.schemas';
 
 const EDITABLE_ROLES = ['CLIENT', 'BARBER', 'ADMIN'] as const;
@@ -97,6 +99,72 @@ export async function updateUser(userId: string, data: UpdateUserInput) {
     select: { id: true, name: true, phone: true, role: true },
   });
   return { userId: updated.id, name: updated.name, phone: updated.phone, role: updated.role, status: 'UPDATED_BY_PLATFORM_ADMIN' };
+}
+
+// FEAT-085: anti-replay (V02) — código já usado fica bloqueado por 30s.
+const usedDevCodes = new Map<string, number>();
+function assertCodeNotReplayed(devUserId: string, code: string) {
+  const k = `${devUserId}:${code}`;
+  const now = Date.now();
+  const exp = usedDevCodes.get(k);
+  if (exp && exp > now) {
+    throw new BusinessError('DUPLICATE_2FA_CODE', 'Este código já foi utilizado. Aguarde gerar um novo.', 409);
+  }
+}
+function markCodeUsed(devUserId: string, code: string) {
+  usedDevCodes.set(`${devUserId}:${code}`, Date.now() + 30_000);
+}
+
+// FEAT-085: exclusão permanente de um tenant, blindada pelo 2FA do próprio DEV.
+// Purga em cascata (transação) todas as tabelas com aquele tenant_id (RN04 atomicidade).
+export async function deleteTenant(devUserId: string, tenantId: string, code: string, ip: string) {
+  const dev = await prisma.user.findUnique({ where: { id: devUserId }, select: { is2faEnabled: true, totpSecret: true } });
+
+  // RN01: DEV precisa ter 2FA ativo.
+  if (!dev?.is2faEnabled || !dev.totpSecret) {
+    throw new BusinessError('DEV_2FA_NOT_CONFIGURED', 'Operação bloqueada. Sua conta de Desenvolvedor precisa ter o 2FA ativado nas configurações antes de executar exclusões de Tenants.', 403);
+  }
+
+  assertCodeNotReplayed(devUserId, code); // V02
+
+  // RN02: tolerância de drift já embutida em verifyCode (±30s).
+  if (!verifyCode(code, decryptSecret(dev.totpSecret))) {
+    console.warn(`[CRITICAL] TENANT_DELETE_FAILED dev=${devUserId} tenant=${tenantId} ip=${ip} reason=invalid_2fa at=${new Date().toISOString()}`);
+    throw new BusinessError('INVALID_DEV_2FA_CODE', 'O código do aplicativo de autenticação está incorreto ou expirou. A exclusão foi abortada por segurança.', 401);
+  }
+
+  const shop = await prisma.barbershop.findUnique({ where: { id: tenantId }, select: { id: true, name: true } });
+  if (!shop) throw new BusinessError('TENANT_NOT_FOUND', 'Barbearia não encontrada.', 404);
+
+  const w = { tenantId };
+  // Ordem: filhas → pais. RN04: tudo numa transação (rollback total em falha).
+  await prisma.$transaction([
+    prisma.appointmentStatusHistory.deleteMany({ where: w }),
+    prisma.notificationOutbox.deleteMany({ where: w }),
+    prisma.cashbackTransaction.deleteMany({ where: w }),
+    prisma.appointmentService.deleteMany({ where: w }),
+    prisma.review.deleteMany({ where: w }),
+    prisma.adminAlert.deleteMany({ where: w }),
+    prisma.barberGoal.deleteMany({ where: w }),
+    prisma.clientNote.deleteMany({ where: w }),
+    prisma.scheduleBlock.deleteMany({ where: w }),
+    prisma.vacationBlock.deleteMany({ where: w }),
+    prisma.barberSlot.deleteMany({ where: w }),
+    prisma.cashbackWallet.deleteMany({ where: w }),
+    prisma.appointment.deleteMany({ where: w }),
+    prisma.coupon.deleteMany({ where: w }),
+    prisma.dailyAdminReport.deleteMany({ where: w }),
+    prisma.globalSettings.deleteMany({ where: w }),
+    prisma.service.deleteMany({ where: w }),
+    prisma.serviceIcon.deleteMany({ where: w }), // só ícones privados do tenant (globais têm tenant_id NULL)
+    prisma.user.deleteMany({ where: w }),
+    prisma.barbershop.delete({ where: { id: tenantId } }),
+  ]);
+
+  invalidateTenantActiveCache(tenantId);
+  markCodeUsed(devUserId, code); // V02
+  // RN03: auditoria crítica.
+  console.warn(`[CRITICAL] TENANT_DELETED dev=${devUserId} tenant=${tenantId} name="${shop.name}" ip=${ip} at=${new Date().toISOString()}`);
 }
 
 // RN04: reset de senha — gera senha temporária aleatória, persiste o hash, exibe 1x em texto plano.

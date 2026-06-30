@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-26T18:30:00
+last_updated: 2026-06-30T16:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1197,6 +1197,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `acceptance`: listar usuários do tenant com telefone formatado; CT01 role=DEV → 400 com a mensagem exata; update corrige telefone (normaliza E.164); reset retorna senha de 8 chars; busca global acha usuário em múltiplos tenants; V01 telefone duplicado no tenant → 422.
 - `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP — list (31 usuários, formattedPhone), CT01 `ROLE_DEV_FORBIDDEN`, update→E.164 + `UPDATED_BY_PLATFORM_ADMIN`, reset (8 chars), search inter-tenant, V01 `PHONE_ALREADY_EXISTS`.
 - `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-085 - Exclusão crítica de tenant via 2FA (Backoffice DEV)
+
+- `status`: `IMPLEMENTED`
+- `area`: `PLATFORM`
+- `actors`: `DEV`
+- `description`: Endpoint destrutivo que apaga **permanentemente** uma barbearia e todos os dados vinculados (clientes, agendamentos, financeiro, etc.), blindado pelo código TOTP de 6 dígitos do próprio DEV. Sem backup/lixeira — destruição definitiva. Purga em cascata transacional por `tenant_id`.
+- `business_rules`: **RN01** — DEV precisa ter 2FA ativo (`is_2fa_enabled`), senão `403 DEV_2FA_NOT_CONFIGURED`. **RN02** — tolerância de drift ±30s (mesma do 2FA). **RN03** — auditoria crítica em log (`[CRITICAL]` com devId/tenantId/ip/timestamp) em sucesso e falha. **RN04** — exclusão atômica (transação única; rollback total em falha). **V01** — header `X-DEV-2FA` obrigatório, numérico, 6 dígitos — validado antes de tocar o banco. **V02** — anti-replay: código usado fica bloqueado por 30s (`409 DUPLICATE_2FA_CODE`).
+- `api`: `DELETE /platform/tenants/:tenantId` — headers `Authorization: Bearer <DEV>` + `X-DEV-2FA: 739102` → `204`. Erros: `INVALID_DEV_2FA_CODE 401` (código errado/header inválido), `DEV_2FA_NOT_CONFIGURED 403`, `DUPLICATE_2FA_CODE 409`, `TENANT_NOT_FOUND 404`. CT02: `ADMIN` barrado em `403 PLATFORM_ACCESS_DENIED` (requireDev, antes do header).
+- `purge`: deleteMany em ordem filhas→pais dentro de `prisma.$transaction` (status_history, outbox, cashback_transactions, appointment_services, reviews, alerts, goals, notes, schedule/vacation/slots, wallets, appointments, coupons, daily_reports, settings, services, service_icons privados, users) + `barbershop.delete`. Cache de tenant ativo invalidado.
+- `frontend`: `PlatformConsole` ganha botão "excluir permanentemente" por barbearia → `DeleteTenantModal` (vermelho, aviso de irreversibilidade + input de 6 dígitos) que envia o `DELETE` com o header `X-DEV-2FA`.
+- `api_compatibility`: `COMPATIBLE` (endpoint novo).
+- `depends_on`: `FEAT-075`, `FEAT-076`
+- `acceptance`: CT01 — após 204, todos os dados do tenant (appointments/users/etc.) somem; CT02 — ADMIN → 403; DEV sem 2FA → 403; código errado/header inválido → 401; código correto → 204; replay do mesmo código → 409.
+- `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP (otplib gerando o código do DEV) — CT02 `PLATFORM_ACCESS_DENIED`, `DEV_2FA_NOT_CONFIGURED`, V01 header inválido→401, código errado→401, delete→204, replay→`409 DUPLICATE_2FA_CODE`, tenant+usuários purgados (lista não traz mais; `/users` do tenant→404).
+- `risk`: `HIGH`
 - `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas

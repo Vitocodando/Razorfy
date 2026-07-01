@@ -4,26 +4,17 @@ import { request, parseConnectionCode, connectByCode } from '../api/client'
 import { useAuth } from '../hooks/useAuth'
 import { Icon } from '../ui/primitives'
 import { AuthScreen, GoogleWhatsappScreen } from '../../modules/auth/screens/LoginScreen'
-// Componentes de página ainda residem no App.tsx monolítico (migração para /modules é a próxima fase).
-// A importação App → AppRoutes → App é um ciclo ESM seguro: só usamos estas funções em tempo de render.
-import {
-  AppShell,
-  DevLoginScreen,
-  PlatformConsole,
-  TenantDiscovery,
-  HomePage,
-  AppointmentsPage,
-  WalletPage,
-  CalendarPage,
-  BarberAgendaPage,
-  BarberSchedulePage,
-  SettingsPage,
-  AdminCommandCenter,
-  ADMIN_NAV_ITEMS,
-  BARBER_NAV_ITEMS,
-  CLIENT_NAV_ITEMS,
-} from '../../App'
-import type { NavKey, NavItem } from '../../App'
+import { HomePage } from '../../modules/appointments/screens/HomePage'
+import { CalendarPage } from '../../modules/appointments/screens/CalendarPage'
+import { AdminCommandCenter } from '../../modules/dashboard/screens/AdminCommandCenter'
+import { BarberAgendaPage, BarberSchedulePage } from '../../modules/barber/screens/BarberPages'
+import { SettingsPage } from '../../modules/settings/screens/SettingsPage'
+import { DevLoginScreen, PlatformConsole } from '../../modules/platform/screens/PlatformConsole'
+import { TenantDiscovery } from '../../modules/onboarding/screens/TenantDiscovery'
+import { AppointmentsPage, WalletPage } from '../../modules/client/screens/ClientPages'
+import { AppShell } from '../ui/AppShell'
+import { ADMIN_NAV_ITEMS, BARBER_NAV_ITEMS, CLIENT_NAV_ITEMS } from './nav'
+import type { NavKey, NavItem } from './nav'
 
 // Roteador raiz: resolve deep-links/OAuth, aplica o gate de sessão/tenant e monta a shell autenticada.
 export function AppRoutes() {

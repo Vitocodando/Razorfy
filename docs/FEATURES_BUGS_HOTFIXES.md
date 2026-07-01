@@ -1226,11 +1226,11 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `api`: `GET/POST /finances/categories`; `GET/POST /finances/fixed-costs`; `PUT/DELETE /finances/fixed-costs/:id` (delete = soft, `is_active=false`); `GET /finances/payables?month=YYYY-MM`; `PATCH /finances/payables/:id/pay` → `200` ou `409 PAYABLE_ALREADY_PAID`. Cron interno: `GET/POST /internal/jobs/generate-payables` (cron-secret). Dashboard `GET /admin/dashboard` ganha `report.totalExpenses` + `report.netIncome`.
 - `data`: 3 tabelas — `expense_categories`, `fixed_costs` (CHECK amount>0, due_day 1–31), `payables` (CHECK status IN PENDING/PAID, amount>0; cópia de description/amount do molde para imutabilidade histórica). RLS habilitado nas 3 (FEAT-086). Migration `0017_finances`.
 - `job`: `generate-payables` (Vercel Cron `1 0 * * *`) itera tenants ativos → `generatePayables()` cria instâncias `PENDING` do mês; log `[generate-payables] Job Finalizado: X Payables gerados para Y Tenants`.
-- `frontend`: pendente (aba **Finanças** no `AdminCommandCenter` — próxima rodada).
+- `frontend`: aba **Finanças** no `AdminCommandCenter` (`modules/dashboard`) — form de novo custo fixo (categoria/descrição/valor/dia), lista de moldes ativos com soft-delete, contas a pagar do mês (seletor `input[type=month]`) com badge status + botão "Marcar pago". Métrica **Lucro líquido** (`report.netIncome`) no topo do dashboard. Carregamento sob demanda ao abrir a aba; ações invalidam a query do dashboard (FEAT-080).
 - `api_compatibility`: `COMPATIBLE` (rotas novas; dashboard só ganha campos).
 - `depends_on`: `FEAT-073`, `FEAT-086`
 - `acceptance`: CT01 — criar molde R$1000 gera 1 `payable` PENDING do mês corrente; CT02 — soft delete não altera relatório de meses anteriores; CT03 — faturamento R$5000 − conta luz R$200 paga → `netIncome` R$4800; CT04 — reajuste não toca instância vencida no passado; CT05 — `due_day=31` em fev → 28/29; CT06 — IDOR token tenant A em `payable` de B → 404; CT07 — pagar conta já paga → `409`.
-- `tests`: `npx prisma generate` ✓, build backend `tsc` ✓. Migration aplica no deploy (Render). Smoke HTTP + frontend pendentes.
+- `tests`: `npx prisma generate` ✓, build backend `tsc` ✓, web `tsc`/`vite build` ✓. Migration aplica no deploy (Render). Smoke HTTP pendente (sem DB local).
 - `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 

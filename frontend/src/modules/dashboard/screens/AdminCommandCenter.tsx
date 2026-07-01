@@ -43,6 +43,8 @@ type DailyAdminReport = {
   idleMinutes: number
   occupancyPct: number
   heatmap: AdminHeatmap[]
+  totalExpenses?: number // FEAT-087
+  netIncome?: number     // FEAT-087
 }
 type AdminGrid = {
   date: string
@@ -54,7 +56,12 @@ type AdminDashboard = {
   alerts: AdminAlert[]
   grid: AdminGrid
 }
-type AdminTab = 'overview' | 'coupons' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection' | 'analytics'
+type AdminTab = 'overview' | 'coupons' | 'vacations' | 'barbers' | 'services' | 'rules' | 'connection' | 'analytics' | 'finances'
+
+// FEAT-087: financeiro
+type ExpenseCategory = { id: string; name: string; colorHex: string | null; tenantId: string | null }
+type FixedCostRow = { id: string; description: string; amount: number; dueDay: number; category: { id: string; name: string; colorHex: string | null } }
+type PayableRow = { id: string; description: string; amount: number; dueDate: string; status: 'PENDING' | 'PAID'; paidAt: string | null; fixedCost: { category: { name: string; colorHex: string | null } } | null }
 type AnalyticsRange = 'LAST_7_DAYS' | 'LAST_14_DAYS' | 'CURRENT_MONTH'
 type AnalyticsData = {
   range: AnalyticsRange
@@ -126,6 +133,29 @@ export function AdminCommandCenter({ session }: { session: Session }) {
   const [serviceForm, setServiceForm] = useState({ name: '', durationMinutes: '30', price: '35', iconId: '' })
   const [icons, setIcons] = useState<ServiceIconItem[]>([])
 
+  // FEAT-087: financeiro (carregado sob demanda ao abrir a aba)
+  const [financeMonth, setFinanceMonth] = useState(() => today().slice(0, 7))
+  const [categories, setCategories] = useState<ExpenseCategory[]>([])
+  const [fixedCosts, setFixedCosts] = useState<FixedCostRow[]>([])
+  const [payables, setPayables] = useState<PayableRow[]>([])
+  const [costForm, setCostForm] = useState({ categoryId: '', description: '', amount: '', dueDay: '5' })
+
+  async function loadFinance(month = financeMonth) {
+    try {
+      const [cats, costs, pays] = await Promise.all([
+        request<ExpenseCategory[]>('/finances/categories', {}, token),
+        request<FixedCostRow[]>('/finances/fixed-costs', {}, token),
+        request<PayableRow[]>(`/finances/payables?month=${month}`, {}, token),
+      ])
+      setCategories(cats)
+      setFixedCosts(costs)
+      setPayables(pays)
+      setCostForm((f) => ({ ...f, categoryId: f.categoryId || cats[0]?.id || '' }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível carregar o financeiro.')
+    }
+  }
+
   async function loadAll() {
     setLoading(true)
     setError('')
@@ -170,8 +200,67 @@ export function AdminCommandCenter({ session }: { session: Session }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
 
+  // FEAT-087: carrega o financeiro ao abrir a aba e ao trocar de mês.
+  useEffect(() => {
+    if (tab !== 'finances') return
+    void loadFinance(financeMonth)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, financeMonth])
+
   async function reloadDate(nextDate: string) {
     setDate(nextDate)
+  }
+
+  // ---------- FEAT-087: financeiro ----------
+  async function createCostSubmit(event: FormEvent) {
+    event.preventDefault()
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request('/finances/fixed-costs', {
+        method: 'POST',
+        body: JSON.stringify({
+          categoryId: costForm.categoryId,
+          description: costForm.description.trim(),
+          amount: Number(costForm.amount),
+          dueDay: Number(costForm.dueDay),
+        }),
+      }, token)
+      setSuccess('Custo fixo cadastrado.')
+      setCostForm((f) => ({ ...f, description: '', amount: '' }))
+      await loadFinance()
+      refreshDashboard()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível cadastrar o custo.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function payPayable(id: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/finances/payables/${id}/pay`, { method: 'PATCH' }, token)
+      setSuccess('Conta liquidada.')
+      await loadFinance()
+      refreshDashboard()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível liquidar a conta.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deleteFixedCost(id: string) {
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      await request(`/finances/fixed-costs/${id}`, { method: 'DELETE' }, token)
+      setSuccess('Custo fixo desativado.')
+      await loadFinance()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Não foi possível desativar o custo.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function createCouponSubmit(event: FormEvent) {
@@ -469,6 +558,7 @@ export function AdminCommandCenter({ session }: { session: Session }) {
               <AdminMetric icon="receipt_long" label="Ticket médio" value={money.format(report?.averageTicket ?? 0)} />
               <AdminMetric icon="person_search" label="LTV estimado" value={money.format(report?.estimatedLtv ?? 0)} />
               <AdminMetric icon="event_busy" label="Ociosidade" value={`${report?.idleMinutes ?? 0} min`} tone={(report?.idleMinutes ?? 0) > 0 ? 'warn' : 'normal'} />
+              <AdminMetric icon="savings" label="Lucro líquido" value={money.format(report?.netIncome ?? report?.netRevenue ?? 0)} tone={(report?.netIncome ?? 0) < 0 ? 'warn' : 'normal'} />
             </div>
 
             {alerts.length > 0 && (
@@ -514,6 +604,7 @@ export function AdminCommandCenter({ session }: { session: Session }) {
                 { key: 'barbers' as const, label: 'Barbeiros', icon: 'group' },
                 { key: 'services' as const, label: 'Serviços', icon: 'content_cut' },
                 { key: 'analytics' as const, label: 'Análises', icon: 'monitoring' },
+                { key: 'finances' as const, label: 'Finanças', icon: 'account_balance' },
                 { key: 'rules' as const, label: 'Regras', icon: 'tune' },
                 { key: 'connection' as const, label: 'Conexão', icon: 'qr_code_2' },
               ].map((item) => (
@@ -768,6 +859,78 @@ export function AdminCommandCenter({ session }: { session: Session }) {
                 data={analytics}
                 loading={analyticsLoading}
               />
+            )}
+
+            {tab === 'finances' && (
+              <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-4">
+                {/* Novo custo fixo */}
+                <form onSubmit={createCostSubmit} className="bg-surface-container-lowest border border-on-surface/10 rounded-xl p-4 flex flex-col gap-3 h-fit">
+                  <h2 className="text-[15px] font-bold text-on-surface">Novo custo fixo</h2>
+                  <select value={costForm.categoryId} onChange={(e) => setCostForm((p) => ({ ...p, categoryId: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]">
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}{c.tenantId ? '' : ' (global)'}</option>)}
+                  </select>
+                  <input required placeholder="Descrição (ex: Aluguel da Loja)" minLength={3} maxLength={100} value={costForm.description} onChange={(e) => setCostForm((p) => ({ ...p, description: e.target.value }))} className="h-11 px-3 bg-surface-container border border-on-surface/10 rounded-lg text-[13px]" />
+                  <label className="text-[12px] text-on-surface-variant">Valor (R$)
+                    <input required type="number" min="0.01" step="0.01" value={costForm.amount} onChange={(e) => setCostForm((p) => ({ ...p, amount: e.target.value }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                  </label>
+                  <label className="text-[12px] text-on-surface-variant">Dia do vencimento (1–31)
+                    <input required type="number" min="1" max="31" value={costForm.dueDay} onChange={(e) => setCostForm((p) => ({ ...p, dueDay: e.target.value }))} className="h-11 px-3 mt-1 w-full bg-surface-container border border-on-surface/10 rounded-lg text-[13px] text-on-surface" />
+                  </label>
+                  <button disabled={saving || !costForm.categoryId} className="h-11 rounded-lg bg-primary text-on-primary text-[12px] font-semibold uppercase tracking-wider disabled:opacity-40">Cadastrar</button>
+
+                  {/* Moldes ativos */}
+                  {fixedCosts.length > 0 && (
+                    <div className="mt-2 border-t border-on-surface/10 pt-3 flex flex-col gap-2">
+                      <p className="text-[11px] font-semibold text-on-surface-variant uppercase tracking-wider">Moldes ativos</p>
+                      {fixedCosts.map((fc) => (
+                        <div key={fc.id} className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[13px] font-semibold text-on-surface truncate">{fc.description}</p>
+                            <p className="text-[11px] text-on-surface-variant">{fc.category.name} · {money.format(fc.amount)} · dia {fc.dueDay}</p>
+                          </div>
+                          <button type="button" onClick={() => deleteFixedCost(fc.id)} disabled={saving} className="p-1.5 text-on-surface-variant hover:text-error" aria-label="Desativar molde" title="Desativar (mantém histórico)"><Icon name="delete" className="text-[18px]" /></button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </form>
+
+                {/* Contas a pagar do mês */}
+                <div className="bg-surface-container-lowest border border-on-surface/10 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-on-surface/10 flex items-center justify-between gap-2">
+                    <h2 className="text-[15px] font-bold text-on-surface">Contas a pagar</h2>
+                    <input type="month" value={financeMonth} onChange={(e) => setFinanceMonth(e.target.value)} className="h-9 px-2 bg-surface-container border border-on-surface/10 rounded-lg text-[12px] text-on-surface" />
+                  </div>
+                  {payables.length === 0 ? (
+                    <p className="p-4 text-[13px] text-on-surface-variant">Nenhuma conta neste mês.</p>
+                  ) : (
+                    <div className="divide-y divide-on-surface/10">
+                      {payables.map((p) => (
+                        <div key={p.id} className="p-4 flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-[14px] font-semibold text-on-surface truncate flex items-center gap-2">
+                              {p.description}
+                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${p.status === 'PAID' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                                {p.status === 'PAID' ? 'Pago' : 'Pendente'}
+                              </span>
+                            </p>
+                            <p className="text-[12px] text-on-surface-variant">
+                              {p.fixedCost?.category.name ? `${p.fixedCost.category.name} · ` : ''}vence {new Date(`${p.dueDate.slice(0, 10)}T12:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
+                              {p.paidAt ? ` · pago ${new Date(p.paidAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}` : ''}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-[14px] font-bold text-on-surface">{money.format(p.amount)}</span>
+                            {p.status === 'PENDING' && (
+                              <button onClick={() => payPayable(p.id)} disabled={saving} className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-primary text-on-primary hover:bg-on-primary-fixed-variant disabled:opacity-40">Marcar pago</button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
 
             {tab === 'rules' && (

@@ -1,30 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent, InputHTMLAttributes, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
+import type { FormEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { QRCodeCanvas } from 'qrcode.react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts'
-
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080/api/v1'
+import type { User, Session, Barbershop } from './core/types'
+import { request, parseConnectionCode, connectByCode } from './core/api/client'
+import { AppRoutes } from './core/routes/AppRoutes'
+import { Icon, ErrorBanner, PrimaryButton } from './core/ui/primitives'
+import { maskPhoneBR } from './core/utils/phone'
+import { TwoFactorLoginScreen } from './modules/auth/screens/LoginScreen'
 
 // ---------- Tipos ----------
 
-type User = { id: string; name: string; email: string; phone: string | null; role: string; tenantId?: string }
-type Session = { accessToken: string; user: User }
-type Barbershop = { id: string; name: string; slug: string; connectionCode?: string; logoUrl?: string | null }
-type ConnectResult = { tenantId: string; name: string; slug: string; connectionCode: string; logoUrl: string | null }
-
-// Extrai código de conexão de texto cru ou deep-link (barberflow://connect/X, .../c/X).
-function parseConnectionCode(raw: string): string {
-  const t = raw.trim()
-  const m = t.match(/(?:\/c\/|\/connect\/)([A-Za-z0-9]+)/)
-  return (m ? m[1] : t).trim().toUpperCase()
-}
-
-// Conecta pelo código: backend valida formato/existência/atividade.
-async function connectByCode(code: string): Promise<Barbershop> {
-  const r = await request<ConnectResult>(`/tenants/connect/${encodeURIComponent(code)}`)
-  return { id: r.tenantId, name: r.name, slug: r.slug, connectionCode: r.connectionCode, logoUrl: r.logoUrl }
-}
 type ServiceItem = { id: string; name: string; durationMinutes: number; price: number; iconId?: string | null }
 type ServiceIconItem = { id: string; name: string; type: 'GLOBAL' | 'CUSTOM'; svgContent: string }
 type Barber = { id: string; name: string }
@@ -150,7 +137,6 @@ type AdminDashboard = {
   alerts: AdminAlert[]
   grid: AdminGrid
 }
-type ApiError = { message?: string }
 
 // ---------- Constantes e utilitários ----------
 
@@ -272,28 +258,6 @@ function suggestCashback(
   return { services: picked, amount: Number(sum.toFixed(2)) }
 }
 
-async function request<T>(path: string, options: RequestInit = {}, token?: string): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  })
-  if (!response.ok) {
-    // Token expirado/inválido numa chamada autenticada: encerra a sessão e volta ao login.
-    if (response.status === 401 && token) {
-      localStorage.removeItem('razorfy.session')
-      window.dispatchEvent(new Event('razorfy:unauthorized'))
-    }
-    const body = (await response.json().catch(() => ({}))) as ApiError
-    throw new Error(body.message || 'Não foi possível concluir a solicitação.')
-  }
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
-}
-
 // ---------- Navegação do app ----------
 
 const CLIENT_NAV_ITEMS = [
@@ -398,24 +362,6 @@ function AppShell({
 
 // ---------- Componentes do design system ----------
 
-function Icon({ name, filled = false, className = '' }: { name: string; filled?: boolean; className?: string }) {
-  return (
-    <span aria-hidden="true" className={`material-symbols-outlined ${filled ? 'filled' : ''} ${className}`}>
-      {name}
-    </span>
-  )
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  if (!message) return null
-  return (
-    <div className="bg-error-container text-on-error-container p-2 rounded-lg border border-error/20 flex items-start gap-2">
-      <Icon name="error" filled className="shrink-0 text-[20px]" />
-      <p className="text-[12px] font-medium pt-[2px]">{message}</p>
-    </div>
-  )
-}
-
 function SuccessBanner({ message }: { message: string }) {
   if (!message) return null
   return (
@@ -423,45 +369,6 @@ function SuccessBanner({ message }: { message: string }) {
       <Icon name="check_circle" filled className="shrink-0 text-[20px]" />
       <p className="text-[12px] font-medium pt-[2px]">{message}</p>
     </div>
-  )
-}
-
-function FloatingField(props: InputHTMLAttributes<HTMLInputElement> & { label: string }) {
-  const { label, id, ...rest } = props
-  return (
-    <div className="relative w-full">
-      <input
-        id={id}
-        placeholder=" "
-        className="peer w-full h-14 px-4 pt-5 pb-1 bg-surface-container-lowest border border-on-surface/10 rounded-lg focus:outline-none focus:border-secondary focus:border-2 transition-all text-[16px] text-on-surface"
-        {...rest}
-      />
-      <label
-        htmlFor={id}
-        className="absolute left-4 top-[18px] text-on-surface-variant text-[16px] transition-all duration-200 pointer-events-none origin-top-left peer-focus:-translate-y-3 peer-focus:scale-75 peer-focus:text-secondary peer-[:not(:placeholder-shown)]:-translate-y-3 peer-[:not(:placeholder-shown)]:scale-75"
-      >
-        {label}
-      </label>
-    </div>
-  )
-}
-
-function PrimaryButton({ children, disabled, onClick, type = 'button', className = '' }: {
-  children: ReactNode
-  disabled?: boolean
-  onClick?: () => void
-  type?: 'button' | 'submit'
-  className?: string
-}) {
-  return (
-    <button
-      type={type}
-      disabled={disabled}
-      onClick={onClick}
-      className={`w-full h-14 bg-primary text-on-primary text-[14px] font-semibold uppercase tracking-widest rounded-lg border-b-2 border-on-primary-fixed-variant hover:bg-primary-container active:translate-y-px disabled:opacity-40 disabled:cursor-not-allowed transition-all ${className}`}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -513,218 +420,6 @@ function StatusBadge({ status }: { status: string }) {
 
 // ---------- App ----------
 
-function App() {
-  const [session, setSession] = useState<Session | null>(() => {
-    const saved = localStorage.getItem('razorfy.session')
-    if (!saved) return null
-    const parsed = JSON.parse(saved) as Session
-    return parsed?.user ? parsed : null
-  })
-  const [screen, setScreen] = useState<'home' | 'calendar'>('home')
-  const [nav, setNav] = useState<NavKey>(() => {
-    const saved = localStorage.getItem('razorfy.session')
-    if (!saved) return 'home'
-    const parsed = JSON.parse(saved) as Session
-    if (parsed?.user?.role === 'ADMIN') return 'admin'
-    return parsed?.user?.role === 'BARBER' ? 'agenda' : 'home'
-  })
-  const [selectedServices, setSelectedServices] = useState<string[]>([])
-  const [tenant, setTenant] = useState<Barbershop | null>(() => {
-    const saved = localStorage.getItem('razorfy.tenant')
-    return saved ? (JSON.parse(saved) as Barbershop) : null
-  })
-
-  const selectTenant = (t: Barbershop) => { localStorage.setItem('razorfy.tenant', JSON.stringify(t)); setTenant(t) }
-  const clearTenant = () => { localStorage.removeItem('razorfy.tenant'); setTenant(null) }
-
-  const signIn = (nextSession: Session) => {
-    localStorage.setItem('razorfy.session', JSON.stringify(nextSession))
-    setSession(nextSession)
-    setNav(nextSession.user.role === 'ADMIN' ? 'admin' : nextSession.user.role === 'BARBER' ? 'agenda' : 'home')
-  }
-
-  const signOut = () => {
-    localStorage.removeItem('razorfy.session')
-    setSession(null)
-    setScreen('home')
-    setNav('home')
-    setSelectedServices([])
-  }
-
-  const updateSessionUser = (patch: Partial<User>) => {
-    setSession((prev) => {
-      if (!prev) return prev
-      const next = { ...prev, user: { ...prev.user, ...patch } }
-      localStorage.setItem('razorfy.session', JSON.stringify(next))
-      return next
-    })
-  }
-
-  // Sessão expirada (401 em chamada autenticada): volta ao login automaticamente.
-  useEffect(() => {
-    const onUnauthorized = () => signOut()
-    window.addEventListener('razorfy:unauthorized', onUnauthorized)
-    return () => window.removeEventListener('razorfy:unauthorized', onUnauthorized)
-  }, [])
-
-  // Deep-link da barbearia: /c/:code (FEAT-074, conexão por código) ou /app/:slug (legado).
-  const [deepLink, setDeepLink] = useState<{ resolving: boolean }>(() => ({
-    resolving: /^\/(c|app)\/[^/]+\/?$/.test(window.location.pathname),
-  }))
-  useEffect(() => {
-    const path = window.location.pathname
-    const byCode = path.match(/^\/c\/([^/]+)\/?$/)
-    const bySlug = path.match(/^\/app\/([^/]+)\/?$/)
-    if (!byCode && !bySlug) return
-    const resolve = byCode
-      ? connectByCode(parseConnectionCode(decodeURIComponent(byCode[1])))
-      : request<Barbershop>(`/barbershops/${decodeURIComponent(bySlug![1])}`)
-    resolve
-      .then((shop) => selectTenant(shop))
-      .catch(() => { /* código/slug inválido ou inativo → cai na tela de conexão */ })
-      .finally(() => {
-        window.history.replaceState({}, '', '/')
-        setDeepLink({ resolving: false })
-      })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Callback do OAuth Google: troca o authorization code por sessão.
-  const [oauth, setOauth] = useState<{ exchanging: boolean; error: string }>(() => {
-    const params = new URLSearchParams(window.location.search)
-    const isCallback = window.location.pathname.includes('/auth/google/callback')
-    return { exchanging: isCallback && params.has('code'), error: '' }
-  })
-  const [googleWhatsapp, setGoogleWhatsapp] = useState<string | null>(null) // FEAT-083: preAuthToken
-
-  useEffect(() => {
-    if (!window.location.pathname.includes('/auth/google/callback')) return
-    const params = new URLSearchParams(window.location.search)
-    const savedState = sessionStorage.getItem('razorfy.oauth.state')
-    sessionStorage.removeItem('razorfy.oauth.state')
-    window.history.replaceState({}, '', '/')
-
-    if (params.get('error')) {
-      queueMicrotask(() => setOauth({ exchanging: false, error: 'Login com Google cancelado.' }))
-      return
-    }
-    const code = params.get('code')
-    if (!code) return
-    if (!savedState || savedState !== params.get('state')) {
-      queueMicrotask(() => setOauth({ exchanging: false, error: 'Sessão de login inválida. Tente novamente.' }))
-      return
-    }
-    request<Session | { status: 'REQUIRE_WHATSAPP'; preAuthToken: string }>('/auth/google', { method: 'POST', body: JSON.stringify({ code, tenantSlug: tenant?.slug }) })
-      .then((r) => {
-        // FEAT-083: novo usuário Google → falta validar WhatsApp.
-        if ('status' in r && r.status === 'REQUIRE_WHATSAPP') {
-          setGoogleWhatsapp(r.preAuthToken)
-          setOauth({ exchanging: false, error: '' })
-          return
-        }
-        signIn(r as Session); setOauth({ exchanging: false, error: '' })
-      })
-      .catch((e) => setOauth({ exchanging: false, error: e instanceof Error ? e.message : 'Falha no login com Google.' }))
-  }, [])
-
-  if (oauth.exchanging) {
-    return (
-      <div className="bg-background min-h-screen flex flex-col items-center justify-center gap-4">
-        <Icon name="progress_activity" className="text-[40px] text-primary animate-spin" />
-        <p className="text-[16px] text-on-surface-variant">Entrando com Google...</p>
-      </div>
-    )
-  }
-
-  // FEAT-083: novo usuário Google precisa validar o WhatsApp antes de concluir o cadastro.
-  if (googleWhatsapp && tenant) {
-    return (
-      <GoogleWhatsappScreen
-        preAuthToken={googleWhatsapp}
-        tenantId={tenant.id}
-        onAuthenticated={(s) => { setGoogleWhatsapp(null); signIn(s) }}
-        onCancel={() => setGoogleWhatsapp(null)}
-      />
-    )
-  }
-
-  if (deepLink.resolving) {
-    return (
-      <div className="bg-background min-h-screen flex flex-col items-center justify-center gap-4">
-        <Icon name="progress_activity" className="text-[40px] text-primary animate-spin" />
-        <p className="text-[16px] text-on-surface-variant">Abrindo a barbearia...</p>
-      </div>
-    )
-  }
-
-  // Backoffice mestre (FEAT-075): rota obscura /platform, sem discovery de tenant.
-  const isPlatformRoute = window.location.pathname.startsWith('/platform')
-
-  // DEV autenticado → console da plataforma, ignorando o gate de tenant.
-  if (session && session.user.role === 'DEV') {
-    return <PlatformConsole session={session} onSignOut={signOut} />
-  }
-
-  if (!session) {
-    if (isPlatformRoute) return <DevLoginScreen onAuthenticated={signIn} />
-    if (!tenant) return <TenantDiscovery onSelect={selectTenant} />
-    return <AuthScreen onAuthenticated={signIn} initialError={oauth.error} tenant={tenant} onChangeTenant={clearTenant} />
-  }
-
-  const activeTenantId = session.user.tenantId ?? tenant?.id
-
-  // Fluxo de agendamento (etapa 2) ocupa a tela toda, sem menu
-  if (screen === 'calendar') {
-    return (
-      <CalendarPage
-        session={session}
-        tenantId={activeTenantId}
-        selectedServiceIds={selectedServices}
-        onBack={() => setScreen('home')}
-        onBooked={() => setSelectedServices([])}
-      />
-    )
-  }
-
-  const navItems: NavItem[] = session.user.role === 'ADMIN'
-    ? ADMIN_NAV_ITEMS
-    : session.user.role === 'BARBER'
-      ? BARBER_NAV_ITEMS
-      : CLIENT_NAV_ITEMS
-
-  const page =
-    nav === 'admin' ? (
-      <AdminCommandCenter session={session} />
-    ) : nav === 'home' ? (
-      <HomePage
-        tenantId={activeTenantId}
-        selectedServices={selectedServices}
-        onToggleService={(id) =>
-          setSelectedServices((current) =>
-            current.includes(id) ? current.filter((s) => s !== id) : [...current, id],
-          )
-        }
-        onSchedule={() => setScreen('calendar')}
-        onLogout={signOut}
-      />
-    ) : nav === 'appointments' ? (
-      <AppointmentsPage session={session} />
-    ) : nav === 'wallet' ? (
-      <WalletPage session={session} />
-    ) : nav === 'agenda' ? (
-      <BarberAgendaPage session={session} />
-    ) : nav === 'schedule' ? (
-      <BarberSchedulePage session={session} />
-    ) : nav === 'settings' ? (
-      <SettingsPage session={session} onSignOut={signOut} onDisconnect={() => { clearTenant(); signOut() }} onProfileChange={(u) => updateSessionUser(u)} />
-    ) : null
-
-  return (
-    <AppShell active={nav} navItems={navItems} onNavigate={setNav} onLogout={signOut}>
-      {page}
-    </AppShell>
-  )
-}
 
 // ---------- Backoffice mestre (DEV / plataforma) — FEAT-075 ----------
 
@@ -1180,53 +875,6 @@ function PlatformUserEditModal({ token, user, onClose, onSaved }: { token: strin
 
 // ---------- Autenticação ----------
 
-async function startGoogleLogin(onError: (message: string) => void) {
-  try {
-    const state = crypto.randomUUID()
-    sessionStorage.setItem('razorfy.oauth.state', state)
-    const { url } = await request<{ url: string }>(`/auth/google/url?state=${encodeURIComponent(state)}`)
-    window.location.href = url
-  } catch (cause) {
-    onError(cause instanceof Error ? cause.message : 'Não foi possível iniciar o login com Google.')
-  }
-}
-
-function GoogleGlyph() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62Z" />
-      <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.02-3.7H.96v2.34A9 9 0 0 0 9 18Z" />
-      <path fill="#FBBC05" d="M3.98 10.72A5.4 5.4 0 0 1 3.7 9c0-.6.1-1.18.28-1.72V4.94H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.06l3.02-2.34Z" />
-      <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.46 3.44 1.35l2.58-2.58A9 9 0 0 0 .96 4.94L3.98 7.28C4.68 5.16 6.66 3.58 9 3.58Z" />
-    </svg>
-  )
-}
-
-function GoogleButton({ label, onError }: { label: string; onError: (message: string) => void }) {
-  const [busy, setBusy] = useState(false)
-  return (
-    <button
-      type="button"
-      disabled={busy}
-      onClick={() => { setBusy(true); startGoogleLogin((m) => { setBusy(false); onError(m) }) }}
-      className="w-full h-14 flex items-center justify-center gap-3 bg-surface-container-lowest border border-on-surface/20 rounded-lg text-[14px] font-semibold text-on-surface hover:bg-surface-container transition-colors disabled:opacity-50"
-    >
-      <GoogleGlyph />
-      {busy ? 'Redirecionando...' : label}
-    </button>
-  )
-}
-
-function AuthDivider() {
-  return (
-    <div className="flex items-center gap-3 my-1">
-      <div className="flex-1 h-px bg-on-surface/15" />
-      <span className="text-[12px] font-medium text-on-surface-variant">ou</span>
-      <div className="flex-1 h-px bg-on-surface/15" />
-    </div>
-  )
-}
-
 // FEAT-074: conexão por código/QR (substitui busca aberta). RN02 case-insensitive (uppercase mask).
 function TenantDiscovery({ onSelect }: { onSelect: (t: Barbershop) => void }) {
   const [code, setCode] = useState('')
@@ -1352,397 +1000,6 @@ function QrScanner({ onDetected, onClose }: { onDetected: (text: string) => void
         <Icon name="keyboard" className="text-[20px]" />
         Digitar código
       </button>
-    </div>
-  )
-}
-
-// FEAT-076 FA01: tela de verificação 2FA no login (após credenciais válidas).
-function TwoFactorLoginScreen({ preAuthToken, onAuthenticated, onCancel }: {
-  preAuthToken: string
-  onAuthenticated: (session: Session) => void
-  onCancel: () => void
-}) {
-  const [code, setCode] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    setLoading(true); setError('')
-    try {
-      const s = await request<Session>('/auth/login/verify-2fa', { method: 'POST', body: JSON.stringify({ code }) }, preAuthToken)
-      onAuthenticated(s)
-    } catch (c) {
-      setError(c instanceof Error ? c.message : 'Código inválido.')
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
-      <main className="w-full max-w-[360px] flex flex-col items-center">
-        <Icon name="encrypted" className="text-[44px] text-primary mb-3" />
-        <h1 className="text-[20px] font-bold text-on-surface text-center">Verificação em duas etapas</h1>
-        <p className="text-[13px] text-on-surface-variant text-center mb-5">Digite o código de 6 dígitos do seu app autenticador.</p>
-        <form className="w-full flex flex-col gap-3" onSubmit={submit}>
-          <ErrorBanner message={error} />
-          <input
-            autoFocus
-            inputMode="numeric"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-            placeholder="000000"
-            maxLength={6}
-            className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[26px] tracking-[0.5em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary"
-          />
-          <PrimaryButton type="submit" disabled={loading || code.length !== 6}>
-            {loading ? 'Verificando...' : 'Verificar'}
-          </PrimaryButton>
-          <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar ao login</button>
-        </form>
-      </main>
-    </div>
-  )
-}
-
-// FEAT-078: login/cadastro por telefone (OTP via WhatsApp), paridade com o app.
-function PhoneOtpScreen({ tenantId, onAuthenticated, onCancel }: {
-  tenantId: string
-  onAuthenticated: (session: Session) => void
-  onCancel: () => void
-}) {
-  const [stage, setStage] = useState<'phone' | 'code'>('phone')
-  const [phone, setPhone] = useState('') // dígitos
-  const [code, setCode] = useState('')
-  const [name, setName] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function send(e: FormEvent) {
-    e.preventDefault()
-    if (phone.length < 10) { setError('Informe um telefone válido com DDD.'); return }
-    setLoading(true); setError('')
-    try {
-      await request(`/tenants/${tenantId}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone }) })
-      setStage('code'); setCode('')
-    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível enviar o código.') }
-    finally { setLoading(false) }
-  }
-  async function verify(e: FormEvent) {
-    e.preventDefault()
-    setLoading(true); setError('')
-    try {
-      const s = await request<Session>(`/tenants/${tenantId}/auth/otp/verify`, { method: 'POST', body: JSON.stringify({ phone, code, name: name.trim() || undefined }) })
-      onAuthenticated(s)
-    } catch (c) { setError(c instanceof Error ? c.message : 'Código inválido.'); setLoading(false) }
-  }
-
-  return (
-    <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
-      <main className="w-full max-w-[360px] flex flex-col items-center">
-        <Icon name="sms" className="text-[44px] text-primary mb-3" />
-        {stage === 'phone' ? (
-          <form className="w-full flex flex-col gap-3" onSubmit={send}>
-            <h1 className="text-[20px] font-bold text-on-surface text-center">Entrar com telefone</h1>
-            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviaremos um código por WhatsApp.</p>
-            <ErrorBanner message={error} />
-            <input autoFocus inputMode="numeric" value={maskPhoneBR(phone)} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="62 9 8888-7777" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
-            <PrimaryButton type="submit" disabled={loading}>{loading ? 'Enviando...' : 'Enviar código'}</PrimaryButton>
-            <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar</button>
-          </form>
-        ) : (
-          <form className="w-full flex flex-col gap-3" onSubmit={verify}>
-            <h1 className="text-[20px] font-bold text-on-surface text-center">Digite o código</h1>
-            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviado para {maskPhoneBR(phone)} via WhatsApp.</p>
-            <ErrorBanner message={error} />
-            <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome (se for seu primeiro acesso)" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
-            <PrimaryButton type="submit" disabled={loading || code.length !== 6}>{loading ? 'Verificando...' : 'Verificar'}</PrimaryButton>
-            <button type="button" onClick={() => { setStage('phone'); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Reenviar / trocar número</button>
-          </form>
-        )}
-      </main>
-    </div>
-  )
-}
-
-// FEAT-083: máscara BR 99 9 9999-9999 a partir de dígitos crus (DDD+9+8).
-function maskPhoneBR(digits: string): string {
-  const d = digits.replace(/\D/g, '').slice(0, 11)
-  if (d.length <= 2) return d
-  if (d.length <= 3) return `${d.slice(0, 2)} ${d.slice(2)}`
-  if (d.length <= 7) return `${d.slice(0, 2)} ${d.slice(2, 3)} ${d.slice(3)}`
-  return `${d.slice(0, 2)} ${d.slice(2, 3)} ${d.slice(3, 7)}-${d.slice(7)}`
-}
-
-// FEAT-083: novo usuário Google valida WhatsApp (telefone → OTP → conclui cadastro).
-function GoogleWhatsappScreen({ preAuthToken, tenantId, onAuthenticated, onCancel }: {
-  preAuthToken: string
-  tenantId: string
-  onAuthenticated: (session: Session) => void
-  onCancel: () => void
-}) {
-  const [stage, setStage] = useState<'phone' | 'code'>('phone')
-  const [digits, setDigits] = useState('')
-  const [code, setCode] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  async function send(e: FormEvent) {
-    e.preventDefault()
-    if (digits.length !== 11) { setError('Informe o WhatsApp completo (DDD + número).'); return }
-    setLoading(true); setError('')
-    try {
-      await request(`/tenants/${tenantId}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone: digits }) })
-      setStage('code'); setCode('')
-    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível enviar o código.') }
-    finally { setLoading(false) }
-  }
-  async function verify(e: FormEvent) {
-    e.preventDefault()
-    setLoading(true); setError('')
-    try {
-      const s = await request<Session>('/auth/otp/verify-google', { method: 'POST', body: JSON.stringify({ phone: digits, code }) }, preAuthToken)
-      onAuthenticated(s)
-    } catch (c) { setError(c instanceof Error ? c.message : 'Código inválido.'); setLoading(false) }
-  }
-
-  return (
-    <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
-      <main className="w-full max-w-[360px] flex flex-col items-center">
-        <Icon name="sms" className="text-[44px] text-primary mb-3" />
-        {stage === 'phone' ? (
-          <form className="w-full flex flex-col gap-3" onSubmit={send}>
-            <h1 className="text-[20px] font-bold text-on-surface text-center">Falta pouco!</h1>
-            <p className="text-[13px] text-on-surface-variant text-center mb-1">Qual o seu WhatsApp? Enviaremos um código para confirmar.</p>
-            <ErrorBanner message={error} />
-            <input autoFocus inputMode="numeric" value={maskPhoneBR(digits)} onChange={(e) => setDigits(e.target.value.replace(/\D/g, '').slice(0, 11))} placeholder="62 9 8888-7777" className="h-12 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[15px] text-on-surface focus:outline-none focus:border-secondary" />
-            <PrimaryButton type="submit" disabled={loading || digits.length !== 11}>{loading ? 'Enviando...' : 'Enviar código'}</PrimaryButton>
-            <button type="button" onClick={onCancel} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Cancelar</button>
-          </form>
-        ) : (
-          <form className="w-full flex flex-col gap-3" onSubmit={verify}>
-            <h1 className="text-[20px] font-bold text-on-surface text-center">Digite o código</h1>
-            <p className="text-[13px] text-on-surface-variant text-center mb-1">Enviado para {maskPhoneBR(digits)} via WhatsApp.</p>
-            <ErrorBanner message={error} />
-            <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
-            <PrimaryButton type="submit" disabled={loading || code.length !== 6}>{loading ? 'Verificando...' : 'Concluir cadastro'}</PrimaryButton>
-            <button type="button" onClick={() => { setStage('phone'); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Trocar número</button>
-          </form>
-        )}
-      </main>
-    </div>
-  )
-}
-
-function AuthScreen({ onAuthenticated, initialError = '', tenant, onChangeTenant }: {
-  onAuthenticated: (session: Session) => void
-  initialError?: string
-  tenant: Barbershop
-  onChangeTenant: () => void
-}) {
-  const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [error, setError] = useState(initialError)
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [googleEnabled, setGoogleEnabled] = useState(false)
-  const [pending2fa, setPending2fa] = useState<string | null>(null) // preAuthToken
-  const [showOtp, setShowOtp] = useState(false) // FEAT-078: login por telefone (OTP)
-  const [regPhone, setRegPhone] = useState('') // FEAT-083: telefone do cadastro (dígitos)
-  const [regCode, setRegCode] = useState('')
-  const [pendingReg, setPendingReg] = useState<{ name: string; email?: string; password: string } | null>(null)
-
-  useEffect(() => {
-    request<{ enabled: boolean }>('/auth/google/status')
-      .then((s) => setGoogleEnabled(s.enabled))
-      .catch(() => setGoogleEnabled(false))
-  }, [])
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setError('')
-    const form = new FormData(event.currentTarget)
-
-    // FEAT-083: cadastro por senha → envia OTP do telefone antes de criar.
-    if (mode === 'register') {
-      if (regPhone.length < 10) { setError('Informe o telefone (WhatsApp) com DDD.'); return }
-      setLoading(true)
-      const data = {
-        name: form.get('name') as string,
-        email: (form.get('email') as string)?.trim() || undefined,
-        password: form.get('password') as string,
-      }
-      try {
-        await request(`/tenants/${tenant.id}/auth/otp/send`, { method: 'POST', body: JSON.stringify({ phone: regPhone }) })
-        setPendingReg(data); setRegCode('')
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : 'Não foi possível enviar o código.')
-      } finally { setLoading(false) }
-      return
-    }
-
-    setLoading(true)
-    const body = { identifier: form.get('identifier'), password: form.get('password'), tenantSlug: tenant.slug }
-    try {
-      const result = await request<Session | { status: 'REQUIRE_2FA'; preAuthToken: string }>('/auth/login', { method: 'POST', body: JSON.stringify(body) })
-      if ('status' in result && result.status === 'REQUIRE_2FA') {
-        setPending2fa(result.preAuthToken)
-        return
-      }
-      onAuthenticated(result as Session)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Falha ao autenticar.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // FEAT-083: conclui o cadastro validando o OTP do telefone.
-  async function submitRegisterCode(e: FormEvent) {
-    e.preventDefault()
-    if (!pendingReg || regCode.length !== 6) return
-    setLoading(true); setError('')
-    try {
-      const s = await request<Session>('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ ...pendingReg, phone: regPhone, code: regCode, tenantSlug: tenant.slug }),
-      })
-      onAuthenticated(s)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Código inválido.')
-      setLoading(false)
-    }
-  }
-
-  if (pending2fa) {
-    return <TwoFactorLoginScreen preAuthToken={pending2fa} onAuthenticated={onAuthenticated} onCancel={() => { setPending2fa(null); setError('') }} />
-  }
-
-  // FEAT-083: etapa de código do cadastro por senha.
-  if (pendingReg) {
-    return (
-      <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
-        <main className="w-full max-w-[360px] flex flex-col items-center">
-          <Icon name="sms" className="text-[44px] text-primary mb-3" />
-          <h1 className="text-[20px] font-bold text-on-surface text-center">Confirme seu WhatsApp</h1>
-          <p className="text-[13px] text-on-surface-variant text-center mb-4">Enviamos um código para {maskPhoneBR(regPhone)}.</p>
-          <form className="w-full flex flex-col gap-3" onSubmit={submitRegisterCode}>
-            <ErrorBanner message={error} />
-            <input autoFocus inputMode="numeric" value={regCode} onChange={(e) => setRegCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-14 px-4 rounded-xl bg-surface-container-lowest border border-on-surface/15 text-[24px] tracking-[0.4em] font-bold text-center text-on-surface focus:outline-none focus:border-secondary" />
-            <PrimaryButton type="submit" disabled={loading || regCode.length !== 6}>{loading ? 'Criando conta...' : 'Concluir cadastro'}</PrimaryButton>
-            <button type="button" onClick={() => { setPendingReg(null); setError('') }} className="text-[13px] text-on-surface-variant hover:text-on-surface mt-1">Voltar</button>
-          </form>
-        </main>
-      </div>
-    )
-  }
-
-  if (showOtp) {
-    return <PhoneOtpScreen tenantId={tenant.id} onAuthenticated={onAuthenticated} onCancel={() => { setShowOtp(false); setError('') }} />
-  }
-
-  const passwordToggle = (
-    <button
-      type="button"
-      onClick={() => setShowPassword((v) => !v)}
-      className="absolute right-4 top-4 text-on-surface-variant hover:text-on-surface transition-colors"
-      aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
-    >
-      <Icon name={showPassword ? 'visibility_off' : 'visibility'} />
-    </button>
-  )
-
-  if (mode === 'login') {
-    return (
-      <div className="bg-background min-h-screen flex flex-col items-center justify-center p-4">
-        <main className="w-full max-w-[400px] flex flex-col items-center">
-          <div className="mb-6 w-44 h-44 flex items-center justify-center">
-            <img alt="Razorfy" src="/razorfy.png" className="object-contain w-full h-full drop-shadow-sm" />
-          </div>
-          <h1 className="text-on-background text-[20px] font-semibold text-center mb-4">
-            Seu estilo. Seu horário. Do seu jeito.
-          </h1>
-          <button onClick={onChangeTenant} className="mb-6 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-container text-on-surface text-[13px] font-semibold hover:bg-surface-container-high transition-colors">
-            <Icon name="storefront" className="text-[16px] text-primary" />
-            {tenant.name}
-            <span className="text-[11px] text-on-surface-variant">· trocar</span>
-          </button>
-          <form className="w-full flex flex-col gap-4" onSubmit={submit}>
-            <ErrorBanner message={error} />
-            <FloatingField label="E-mail ou telefone" id="identifier" name="identifier" type="text" required />
-            <div className="relative w-full">
-              <FloatingField label="Senha" id="password" name="password" type={showPassword ? 'text' : 'password'} required />
-              {passwordToggle}
-            </div>
-            <PrimaryButton type="submit" disabled={loading} className="mt-1">
-              {loading ? 'Entrando...' : 'Entrar'}
-            </PrimaryButton>
-            {googleEnabled && (
-              <>
-                <AuthDivider />
-                <GoogleButton label="Entrar com Google" onError={setError} />
-              </>
-            )}
-          </form>
-          <div className="mt-8 text-center">
-            <button onClick={() => { setMode('register'); setError('') }} className="text-on-surface-variant text-[16px]">
-              Não tem uma conta?{' '}
-              <span className="text-[14px] font-semibold text-secondary underline decoration-2 underline-offset-4 hover:text-primary transition-colors">Cadastre-se</span>
-            </button>
-          </div>
-        </main>
-      </div>
-    )
-  }
-
-  return (
-    <div className="bg-background min-h-screen flex flex-col items-center">
-      <header className="w-full max-w-md mx-auto px-4 h-16 flex items-center">
-        <button onClick={() => { setMode('login'); setError('') }} className="p-2 -ml-2 text-on-surface hover:bg-surface-container-high rounded-full transition-colors" aria-label="Voltar">
-          <Icon name="arrow_back" />
-        </button>
-        <div className="flex-1" />
-        <div className="text-[24px] font-bold italic uppercase tracking-tighter text-on-surface">Razorfy</div>
-      </header>
-      <main className="w-full max-w-md px-4 pt-8 pb-8 flex-1 flex flex-col justify-center">
-        <div className="mb-8">
-          <h1 className="text-[28px] md:text-[32px] font-bold text-on-surface mb-2">Crie sua conta</h1>
-          <p className="text-[16px] text-on-surface-variant">Junte-se à barbearia mais afiada da cidade.</p>
-        </div>
-        <form className="space-y-6 flex-1 flex flex-col" onSubmit={submit}>
-          <ErrorBanner message={error} />
-          <div className="space-y-4">
-            <FloatingField label="Nome completo" id="name" name="name" type="text" minLength={3} required />
-            <FloatingField label="Telefone (WhatsApp)" id="phone" name="phone" type="tel" inputMode="tel" value={maskPhoneBR(regPhone)} onChange={(e) => setRegPhone(e.target.value.replace(/\D/g, '').slice(0, 11))} required />
-            <FloatingField label="E-mail (opcional)" id="email" name="email" type="email" />
-            <div className="relative w-full">
-              <FloatingField label="Senha (mínimo 8 caracteres)" id="password" name="password" type={showPassword ? 'text' : 'password'} minLength={8} required />
-              {passwordToggle}
-            </div>
-          </div>
-          <div className="mt-4 flex flex-col gap-4">
-            <PrimaryButton type="submit" disabled={loading}>
-              {loading ? 'Criando conta...' : 'Criar conta'}
-            </PrimaryButton>
-            <button type="button" onClick={() => { setError(''); setShowOtp(true) }} className="inline-flex items-center justify-center gap-2 h-11 rounded-xl border border-on-surface/15 text-on-surface text-[14px] font-semibold hover:bg-surface-container transition-colors">
-              <Icon name="sms" className="text-[18px] text-primary" />
-              Cadastrar com telefone (WhatsApp)
-            </button>
-            {googleEnabled && (
-              <>
-                <AuthDivider />
-                <GoogleButton label="Cadastrar com Google" onError={setError} />
-              </>
-            )}
-          </div>
-          <div className="mt-auto pt-8 text-center">
-            <p className="text-[16px] text-on-surface-variant">
-              Já tem uma conta?{' '}
-              <button type="button" onClick={() => { setMode('login'); setError('') }} className="text-primary font-bold hover:underline">Faça login</button>
-            </p>
-          </div>
-        </form>
-      </main>
     </div>
   )
 }
@@ -4327,5 +3584,32 @@ function BarberSchedulePage({ session }: { session: Session }) {
     </div>
   )
 }
+
+// ---------- Shell de inicialização ----------
+// App é apenas a casca: delega todo o roteamento/gate ao AppRoutes (core/routes).
+function App() {
+  return <AppRoutes />
+}
+
+// Reexports consumidos pelo AppRoutes enquanto as páginas ainda vivem neste monólito
+// (serão migradas para /modules nas próximas fases da refatoração).
+export {
+  AppShell,
+  DevLoginScreen,
+  PlatformConsole,
+  TenantDiscovery,
+  HomePage,
+  AppointmentsPage,
+  WalletPage,
+  CalendarPage,
+  BarberAgendaPage,
+  BarberSchedulePage,
+  SettingsPage,
+  AdminCommandCenter,
+  ADMIN_NAV_ITEMS,
+  BARBER_NAV_ITEMS,
+  CLIENT_NAV_ITEMS,
+}
+export type { NavKey, NavItem }
 
 export default App

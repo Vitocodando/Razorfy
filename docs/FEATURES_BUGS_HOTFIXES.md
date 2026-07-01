@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-06-30T16:00:00
+last_updated: 2026-07-01T18:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1214,6 +1214,24 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `acceptance`: CT01 — após 204, todos os dados do tenant (appointments/users/etc.) somem; CT02 — ADMIN → 403; DEV sem 2FA → 403; código errado/header inválido → 401; código correto → 204; replay do mesmo código → 409.
 - `tests`: build backend ✓, web `tsc`/`vite build` ✓; smoke HTTP (otplib gerando o código do DEV) — CT02 `PLATFORM_ACCESS_DENIED`, `DEV_2FA_NOT_CONFIGURED`, V01 header inválido→401, código errado→401, delete→204, replay→`409 DUPLICATE_2FA_CODE`, tenant+usuários purgados (lista não traz mais; `/users` do tenant→404).
 - `risk`: `HIGH`
+- `target_release`: `UNRELEASED`
+
+### FEAT-087 - Gestão de custos fixos e fluxo de caixa
+
+- `status`: `IMPLEMENTED`
+- `area`: `FINANCE`
+- `actors`: `ADMIN`
+- `description`: Módulo financeiro que cadastra despesas recorrentes (moldes/`FixedCost`) e gera contas a pagar mensais (instâncias/`Payable`) com ciclo Pendente→Pago. Categorias mistas (globais imutáveis + por tenant). Dashboard passa a calcular lucro líquido real (`netIncome = netRevenue − despesas pagas`). Motor de geração idempotente rodando diariamente via cron.
+- `business_rules`: **RN01** — só `ADMIN` acessa (rotas sob `requireStrictAdmin`); `BARBER`→`403`. **RN02** — categorias `tenant_id NULL` são globais imutáveis (semeadas: Aluguel/Água/Luz/Internet/Salários/Produtos/Impostos); com `tenant_id` são exclusivas do tenant. **RN03** — molde nunca é pago direto; o status pertence ao `Payable`. **RN04** — reajuste do molde propaga só para `Payables PENDING` com `due_date >= hoje` (instâncias pagas/passadas imutáveis). **RN05** — dedução no dashboard só com `status = PAID` na janela do filtro. **V01** — `amount > 0`, `due_day` 1–31, `description` 3–100. **V02** — âncora de calendário: `due_day=31` em fevereiro → último dia válido (28/29). **V03** — IDOR: `Payable`/molde sempre filtrado por `tenant_id` (retorna `404`, não vaza existência). **V04** — geração idempotente (índice único `fixed_cost_id + mês`).
+- `api`: `GET/POST /finances/categories`; `GET/POST /finances/fixed-costs`; `PUT/DELETE /finances/fixed-costs/:id` (delete = soft, `is_active=false`); `GET /finances/payables?month=YYYY-MM`; `PATCH /finances/payables/:id/pay` → `200` ou `409 PAYABLE_ALREADY_PAID`. Cron interno: `GET/POST /internal/jobs/generate-payables` (cron-secret). Dashboard `GET /admin/dashboard` ganha `report.totalExpenses` + `report.netIncome`.
+- `data`: 3 tabelas — `expense_categories`, `fixed_costs` (CHECK amount>0, due_day 1–31), `payables` (CHECK status IN PENDING/PAID, amount>0; cópia de description/amount do molde para imutabilidade histórica). RLS habilitado nas 3 (FEAT-086). Migration `0017_finances`.
+- `job`: `generate-payables` (Vercel Cron `1 0 * * *`) itera tenants ativos → `generatePayables()` cria instâncias `PENDING` do mês; log `[generate-payables] Job Finalizado: X Payables gerados para Y Tenants`.
+- `frontend`: pendente (aba **Finanças** no `AdminCommandCenter` — próxima rodada).
+- `api_compatibility`: `COMPATIBLE` (rotas novas; dashboard só ganha campos).
+- `depends_on`: `FEAT-073`, `FEAT-086`
+- `acceptance`: CT01 — criar molde R$1000 gera 1 `payable` PENDING do mês corrente; CT02 — soft delete não altera relatório de meses anteriores; CT03 — faturamento R$5000 − conta luz R$200 paga → `netIncome` R$4800; CT04 — reajuste não toca instância vencida no passado; CT05 — `due_day=31` em fev → 28/29; CT06 — IDOR token tenant A em `payable` de B → 404; CT07 — pagar conta já paga → `409`.
+- `tests`: `npx prisma generate` ✓, build backend `tsc` ✓. Migration aplica no deploy (Render). Smoke HTTP + frontend pendentes.
+- `risk`: `MEDIUM`
 - `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas

@@ -5,6 +5,7 @@
   ],
   "crons": [
     { "path": "/api/internal/jobs/expire-holds", "schedule": "* * * * *" },
-    { "path": "/api/internal/jobs/process-outbox", "schedule": "* * * * *" }
+    { "path": "/api/internal/jobs/process-outbox", "schedule": "* * * * *" },
+    { "path": "/api/internal/jobs/generate-payables", "schedule": "1 0 * * *" }
   ]
 }

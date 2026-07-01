@@ -9,6 +9,7 @@ import * as notifSvc from '../notification/notification.service';
 import * as settingsSvc from '../settings/settings.service';
 import { config } from '../config';
 import { publishDomainEvent } from '../events/eventBus';
+import { paidExpensesInWindow } from '../finance/finance.service';
 
 type TxClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
@@ -359,12 +360,21 @@ export async function refreshDailyReport(tenantId: string, date = localDateStrin
 }
 
 export async function getDashboard(tenantId: string, date = localDateString()) {
-  const [report, alerts, grid] = await Promise.all([
+  const { dayStartUtc, dayEndUtc } = localDayRangeUtc(date);
+  const [report, alerts, grid, totalExpenses] = await Promise.all([
     refreshDailyReport(tenantId, date),
     listAdminAlerts(tenantId, 'PENDING'),
     getGlobalGrid(tenantId, date),
+    // FEAT-087: custos liquidados na janela do dia (RN05 — só PAID entra na dedução).
+    paidExpensesInWindow(tenantId, dayStartUtc, dayEndUtc),
   ]);
-  return { report, alerts: alerts.slice(0, 5), grid };
+  // Lucro líquido = receita líquida − despesas pagas (na mesma janela do filtro).
+  const netIncome = report.netRevenue.minus(totalExpenses).toDecimalPlaces(2);
+  return {
+    report: { ...report, totalExpenses, netIncome },
+    alerts: alerts.slice(0, 5),
+    grid,
+  };
 }
 
 export async function listAdminAlerts(tenantId: string, status?: 'PENDING' | 'RESOLVED') {

@@ -30,6 +30,7 @@ import { adminRouter } from './admin/admin.router';
 import { userRouter } from './user/user.router';
 import { tenantRouter, barbershopRouter } from './catalog/tenant.router';
 import { platformRouter } from './platform/platform.router';
+import { financeRouter } from './finance/finance.router';
 
 export function createApp() {
   const app = express();
@@ -64,6 +65,7 @@ export function createApp() {
   app.use('/api/v1', goalRouter);
   app.use('/api/v1', crmRouter);
   app.use('/api/v1/admin', adminRouter);
+  app.use('/api/v1/finances', financeRouter);
   app.use('/api/v1/platform', platformRouter);
   app.use('/api/v1/users', userRouter);
   app.use('/api/internal/jobs', jobsRouter);

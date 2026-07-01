@@ -370,3 +370,58 @@ model ClientNote {
   tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
   @@map("client_notes")
 }
+
+// ---------- FEAT-087: Gestão de Custos Fixos e Fluxo de Caixa ----------
+
+model ExpenseCategory {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @db.VarChar(50)
+  colorHex  String?  @map("color_hex") @db.VarChar(7)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  fixedCosts FixedCost[]
+
+  // Nulo = categoria global imutável (semeada); preenchido = exclusiva do tenant (RN02).
+  tenantId String? @map("tenant_id") @db.Uuid
+
+  @@map("expense_categories")
+}
+
+model FixedCost {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryId  String   @map("category_id") @db.Uuid
+  description String   @db.VarChar(100)
+  amount      Decimal  @db.Decimal(10, 2)
+  dueDay      Int      @map("due_day")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  category ExpenseCategory @relation(fields: [categoryId], references: [id])
+  payables Payable[]
+
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
+  @@index([tenantId, isActive])
+  @@map("fixed_costs")
+}
+
+model Payable {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fixedCostId String?   @map("fixed_cost_id") @db.Uuid
+  description String    @db.VarChar(100)
+  amount      Decimal   @db.Decimal(10, 2)
+  dueDate     DateTime  @map("due_date") @db.Date
+  status      String    @default("PENDING") @db.VarChar(10)
+  paidAt      DateTime? @map("paid_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  fixedCost FixedCost? @relation(fields: [fixedCostId], references: [id])
+
+  tenantId String @default("aaaaaaaa-0000-0000-0000-000000000001") @map("tenant_id") @db.Uuid
+
+  @@index([tenantId, status, paidAt])
+  @@index([tenantId, dueDate])
+  @@index([fixedCostId, dueDate])
+  @@map("payables")
+}

@@ -422,6 +422,6 @@ model Payable {
 
   @@index([tenantId, status, paidAt])
   @@index([tenantId, dueDate])
-  @@index([fixedCostId, dueDate])
+  @@unique([fixedCostId, dueDate])
   @@map("payables")
 }

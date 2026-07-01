@@ -803,5 +803,10 @@
     "mtime": 1781108001.614229,
     "ast_hash": "b35af6592420de9f4b8c25eae7055c16",
     "semantic_hash": "b35af6592420de9f4b8c25eae7055c16"
+  },
+  "docs/ANALISE_ARQUITETURA.md": {
+    "mtime": 1782905516.7746975,
+    "ast_hash": "a041d5a7882aad335b699bc505a4038d",
+    "semantic_hash": "a041d5a7882aad335b699bc505a4038d"
   }
 }

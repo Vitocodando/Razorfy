@@ -5,6 +5,7 @@ import { devBootstrap } from './config/devBootstrap';
 import { startPaymentHoldExpirationJob } from './jobs/paymentHoldExpiration.job';
 import { startOutboxProcessor } from './notification/outboxProcessor';
 import { startWinBackJob } from './jobs/winBack.job';
+import { startGeneratePayablesJob } from './jobs/generatePayables.job';
 
 async function main() {
   const app = createApp();
@@ -19,6 +20,7 @@ async function main() {
     startPaymentHoldExpirationJob(),
     startOutboxProcessor(),
     startWinBackJob(),
+    startGeneratePayablesJob(),
   ];
 
   let shuttingDown = false;

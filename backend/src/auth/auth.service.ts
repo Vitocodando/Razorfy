@@ -9,6 +9,7 @@ import { decryptSecret } from '../common/crypto';
 import { classifyIdentifier, normalizeE164 } from '../common/phone';
 import { verifyCode } from './twofa.service';
 import { consumeOtp } from './otp.service';
+import { invalidateTokenCache } from '../middleware/authenticate';
 
 const STAFF_ROLES: UserRole[] = ['BARBER', 'ADMIN', 'DEV'];
 const DEFAULT_TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -60,11 +61,13 @@ export async function register(data: {
   // Valida o código antes de criar (consumeOtp normaliza para E.164 e destrói o OTP).
   const phone = consumeOtp(tenantId, data.phone, data.code);
 
+  // Anti-enumeração (SEC): resposta genérica não revela se telefone/e-mail já existe.
+  const conflict = () => new BusinessError('REGISTRATION_CONFLICT', 'Não foi possível concluir o cadastro com estes dados.', 409);
   const phoneTaken = await prisma.user.findFirst({ where: { tenantId, phone } });
-  if (phoneTaken) throw new BusinessError('PHONE_ALREADY_EXISTS', 'Este telefone já está cadastrado.', 409);
+  if (phoneTaken) throw conflict();
   if (email) {
     const emailTaken = await prisma.user.findFirst({ where: { tenantId, email: { equals: email, mode: 'insensitive' } } });
-    if (emailTaken) throw new BusinessError('EMAIL_ALREADY_EXISTS', 'Este e-mail já está cadastrado.', 409);
+    if (emailTaken) throw conflict();
   }
 
   const hash = await bcrypt.hash(data.password, 12);
@@ -278,6 +281,13 @@ function sessionFor(user: { id: string; name: string; email: string | null; phon
     accessToken: tokenFor(user),
     user: { id: user.id, name: user.name, email: user.email ?? null, phone: user.phone ?? null, role: user.role, tenantId: user.tenantId },
   };
+}
+
+// SEC (FEAT-088): revoga todas as sessões do usuário (logout / troca de senha).
+// Marca token_valid_after=agora → JWTs anteriores são rejeitados no authenticate.
+export async function revokeSessions(userId: string): Promise<void> {
+  await prisma.user.update({ where: { id: userId }, data: { tokenValidAfter: new Date() } });
+  invalidateTokenCache(userId);
 }
 
 // Reuso por outros fluxos de autenticação (ex.: OTP por telefone — FEAT-077).

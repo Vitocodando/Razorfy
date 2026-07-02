@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Session, Barbershop, User } from '../types'
+import { request } from '../api/client'
 
 const SESSION_KEY = 'razorfy.session'
 const TENANT_KEY = 'razorfy.tenant'
@@ -22,7 +23,13 @@ export function useAuth() {
   const clearTenant = () => { localStorage.removeItem(TENANT_KEY); setTenant(null) }
 
   const signIn = (next: Session) => { localStorage.setItem(SESSION_KEY, JSON.stringify(next)); setSession(next) }
-  const signOut = () => { localStorage.removeItem(SESSION_KEY); setSession(null) }
+  const signOut = () => {
+    // SEC (FEAT-088): revogação real no backend (best-effort; não bloqueia o logout local).
+    const token = session?.accessToken
+    if (token) request('/auth/logout', { method: 'POST' }, token).catch(() => {})
+    localStorage.removeItem(SESSION_KEY)
+    setSession(null)
+  }
 
   const updateSessionUser = (patch: Partial<User>) => {
     setSession((prev) => {

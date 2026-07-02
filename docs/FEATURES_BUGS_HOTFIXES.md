@@ -3,7 +3,7 @@ document_id: RAZORFY-FEATURE-REGISTRY
 schema_version: 1
 project: Razorfy
 language: pt-BR
-last_updated: 2026-07-01T18:00:00
+last_updated: 2026-07-02T10:00:00
 source_of_truth: true
 automation_ready: true
 ---
@@ -1232,6 +1232,23 @@ Um ID nunca deve ser reutilizado, mesmo se o item for cancelado.
 - `acceptance`: CT01 — criar molde R$1000 gera 1 `payable` PENDING do mês corrente; CT02 — soft delete não altera relatório de meses anteriores; CT03 — faturamento R$5000 − conta luz R$200 paga → `netIncome` R$4800; CT04 — reajuste não toca instância vencida no passado; CT05 — `due_day=31` em fev → 28/29; CT06 — IDOR token tenant A em `payable` de B → 404; CT07 — pagar conta já paga → `409`.
 - `tests`: `npx prisma generate` ✓, build backend `tsc` ✓, web `tsc`/`vite build` ✓. Migration aplica no deploy (Render). Smoke HTTP pendente (sem DB local).
 - `risk`: `MEDIUM`
+- `target_release`: `UNRELEASED`
+
+### FEAT-088 - Hardening de segurança (AppSec)
+
+- `status`: `IMPLEMENTED`
+- `area`: `SECURITY`
+- `actors`: `ALL`
+- `description`: Correção de 4 vulnerabilidades (auditoria SAST) + revogação de sessão. IDOR multi-tenant em agendamentos, ausência de rate-limit, falta de security headers, enumeração de usuários no cadastro, e ciclo de vida do JWT sem revogação.
+- `business_rules`: **SEC01 (IDOR)** — `cancelAppointment`/`concludeAppointment` cruzam `appt.tenantId` com o tenant do ator; ADMIN preso ao próprio tenant, DEV (tenantId null) cross-tenant por design; retorna `404 APPOINTMENT_NOT_FOUND` (não vaza existência). **SEC02 (rate-limit)** — `express-rate-limit`: `authLimiter` 10/15min por IP nas rotas de credencial/OTP + `globalLimiter` 120/min; `app.set('trust proxy', 1)` para IP real no Render. **SEC03 (headers)** — `helmet` com CSP `default-src 'none'`+`frameAncestors 'none'`, `frameguard deny` (X-Frame-Options), HSTS 180d, `no-referrer`. **SEC04 (anti-enum)** — cadastro retorna `REGISTRATION_CONFLICT` genérico (não revela e-mail/telefone existente). **SEC05 (revogação JWT)** — coluna `users.token_valid_after`; `authenticate` rejeita JWT com `iat` anterior (código `SESSION_REVOKED`), com cache curto (30s) por usuário para não custar 1 query/request; logout (`POST /auth/logout`) e troca de senha setam `token_valid_after=now()`.
+- `api`: `POST /auth/logout` (autenticado, `204`, revoga sessões). `/auth/login|register|login/verify-2fa|otp/verify-google` agora sob `authLimiter`. Novos códigos: `SESSION_REVOKED 401`, `TOO_MANY_ATTEMPTS/TOO_MANY_REQUESTS 429`, `REGISTRATION_CONFLICT 409`.
+- `data`: coluna `users.token_valid_after TIMESTAMPTZ` (nullable). Migration `0018_token_valid_after` (idempotente).
+- `audit`: verificados já-seguros → CORS (allowlist estrita), PII (session/DTO sem hash/totpSecret), SQLi (100% `$queryRaw` parametrizado), demais ops admin (`applyNoShow`/`deleteVacationBlock`/`resolveAdminAlert` já tenant-scoped).
+- `frontend`: `useAuth.signOut` chama `POST /auth/logout` (best-effort) antes de limpar o localStorage.
+- `api_compatibility`: `COMPATIBLE` (rotas novas + headers; register muda só a mensagem de erro).
+- `depends_on`: `FEAT-073`, `FEAT-076`
+- `tests`: build backend `tsc` ✓, web `tsc`/`vite build` ✓, migration 0018 aplicada. Smoke HTTP pendente.
+- `risk`: `MEDIUM` (`trust proxy` é o ponto de atenção de deploy).
 - `target_release`: `UNRELEASED`
 
 ## 4. Regras de negócio rastreadas

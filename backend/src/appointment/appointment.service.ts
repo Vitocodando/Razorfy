@@ -277,6 +277,11 @@ export async function cancelAppointment(appointmentId: string, actorId: string) 
     const appt = await lockAppointment(tx, appointmentId);
     const actor = await tx.user.findUnique({ where: { id: actorId } });
     if (!actor) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
+    // IDOR (SEC): ADMIN só age no próprio tenant; DEV (tenantId null) é cross-tenant por design.
+    // 404 (não 403) para não confirmar existência do recurso em outro tenant.
+    if (actor.tenantId && appt.tenantId !== actor.tenantId) {
+      throw new BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
+    }
 
     const isOwner = appt.clientId === actorId;
     const isAdmin = actor.role === 'ADMIN' || actor.role === 'DEV';
@@ -325,6 +330,11 @@ export async function concludeAppointment(appointmentId: string, actorId: string
     const appt = await lockAppointment(tx, appointmentId);
     const actor = await tx.user.findUnique({ where: { id: actorId } });
     if (!actor) throw new BusinessError('USER_NOT_FOUND', 'Usuário não encontrado.', 404);
+    // IDOR (SEC): ADMIN só age no próprio tenant; DEV (tenantId null) é cross-tenant por design.
+    // 404 (não 403) para não confirmar existência do recurso em outro tenant.
+    if (actor.tenantId && appt.tenantId !== actor.tenantId) {
+      throw new BusinessError('APPOINTMENT_NOT_FOUND', 'Agendamento não encontrado.', 404);
+    }
 
     if (actor.role === 'CLIENT') {
       throw new BusinessError('STAFF_REQUIRED', 'Operação restrita à equipe.', 403);

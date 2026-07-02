@@ -24,6 +24,8 @@ model User {
   isAnonymized                Boolean @default(false) @map("is_anonymized")
   is2faEnabled                Boolean @default(false) @map("is_2fa_enabled")
   totpSecret                  String? @map("totp_secret") @db.VarChar(255)
+  // SEC: JWTs emitidos antes deste instante são rejeitados (logout/troca-de-senha).
+  tokenValidAfter             DateTime? @map("token_valid_after") @db.Timestamptz
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   barberSlots                  BarberSlot[]

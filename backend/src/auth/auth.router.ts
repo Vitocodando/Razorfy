@@ -1,20 +1,28 @@
 import { Router } from 'express';
 import { RegisterSchema, LoginSchema, GoogleAuthSchema, Verify2faSchema, VerifyGoogleOtpSchema } from './auth.schemas';
-import { register, login, loginWithGoogle, googleAuthUrl, consumePreAuthToken, verifyLogin2fa, verifyGoogleOtp } from './auth.service';
+import { register, login, loginWithGoogle, googleAuthUrl, consumePreAuthToken, verifyLogin2fa, verifyGoogleOtp, revokeSessions } from './auth.service';
 import { asyncHandler } from '../common/asyncHandler';
 import { BusinessError } from '../common/BusinessError';
 import { googleOAuthEnabled } from '../config';
+import { authLimiter } from '../common/rateLimit';
+import { authenticate } from '../middleware/authenticate';
 import { z } from 'zod';
 
 export const authRouter = Router();
 
-authRouter.post('/register', asyncHandler(async (req, res) => {
+authRouter.post('/register', authLimiter, asyncHandler(async (req, res) => {
   const data = RegisterSchema.parse(req.body);
   const result = await register(data);
   res.status(201).json(result);
 }));
 
-authRouter.post('/login', asyncHandler(async (req, res) => {
+// SEC: logout com revogação real — invalida todos os JWTs anteriores do usuário.
+authRouter.post('/logout', authenticate, asyncHandler(async (req, res) => {
+  await revokeSessions(req.user!.id);
+  res.status(204).send();
+}));
+
+authRouter.post('/login', authLimiter, asyncHandler(async (req, res) => {
   const { identifier, password, tenantSlug } = LoginSchema.parse(req.body);
   const result = await login(identifier, password, tenantSlug);
   // FA01: 2FA exigido → 202 Accepted com preAuthToken; senão 200 com a sessão.
@@ -26,7 +34,7 @@ authRouter.post('/login', asyncHandler(async (req, res) => {
 }));
 
 // FA01 passo 6/7: troca preAuthToken + código TOTP pelo JWT final.
-authRouter.post('/login/verify-2fa', asyncHandler(async (req, res) => {
+authRouter.post('/login/verify-2fa', authLimiter, asyncHandler(async (req, res) => {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     throw new BusinessError('PRE_AUTH_INVALID', 'Token de verificação não fornecido.', 401);
@@ -63,7 +71,7 @@ authRouter.post('/google', asyncHandler(async (req, res) => {
 }));
 
 // FEAT-083 Fase B: fecha o cadastro Google com o OTP do WhatsApp.
-authRouter.post('/otp/verify-google', asyncHandler(async (req, res) => {
+authRouter.post('/otp/verify-google', authLimiter, asyncHandler(async (req, res) => {
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     throw new BusinessError('PRE_AUTH_INVALID', 'Token de verificação não fornecido.', 401);

@@ -4,6 +4,7 @@ import { prisma } from '../prisma';
 import { BusinessError } from '../common/BusinessError';
 import { encryptSecret, decryptSecret } from '../common/crypto';
 import { generateSecret, buildOtpAuthUri, verifyCode } from '../auth/twofa.service';
+import { invalidateTokenCache } from '../middleware/authenticate';
 
 const FUTURE_BLOCKING = ['CONFIRMED', 'PENDING_PAYMENT'];
 
@@ -107,7 +108,9 @@ export async function changePassword(userId: string, currentPassword: string, ne
   if (await bcrypt.compare(newPassword, user.password)) {
     throw new BusinessError('SAME_PASSWORD', 'A nova senha deve ser diferente da atual.', 422);
   }
-  await prisma.user.update({ where: { id: userId }, data: { password: await bcrypt.hash(newPassword, 12) } });
+  // SEC (FEAT-088): troca de senha revoga todas as sessões anteriores.
+  await prisma.user.update({ where: { id: userId }, data: { password: await bcrypt.hash(newPassword, 12), tokenValidAfter: new Date() } });
+  invalidateTokenCache(userId);
 }
 
 // RF03 / RN01 / RN02 / V03: anonimização LGPD do cliente (soft-delete + PII mascarado + carteira zerada).

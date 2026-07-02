@@ -15,7 +15,25 @@ declare global {
 
 const DEFAULT_TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
-type TokenPayload = { sub: string; roles: string[]; name: string; tnt?: string; type?: string };
+type TokenPayload = { sub: string; roles: string[]; name: string; tnt?: string; type?: string; iat?: number };
+
+// SEC (FEAT-088): revogação de sessão. Cache curto de users.token_valid_after por usuário,
+// para não fazer 1 query por request (mesma estratégia do tenantActiveCache).
+const TOKEN_REVOKE_TTL_MS = 30_000;
+const tokenValidAfterCache = new Map<string, { validAfterMs: number | null; at: number }>();
+
+export function invalidateTokenCache(userId: string): void {
+  tokenValidAfterCache.delete(userId);
+}
+
+async function resolveTokenValidAfter(userId: string): Promise<number | null> {
+  const cached = tokenValidAfterCache.get(userId);
+  if (cached && Date.now() - cached.at < TOKEN_REVOKE_TTL_MS) return cached.validAfterMs;
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { tokenValidAfter: true } });
+  const validAfterMs = u?.tokenValidAfter ? u.tokenValidAfter.getTime() : null;
+  tokenValidAfterCache.set(userId, { validAfterMs, at: Date.now() });
+  return validAfterMs;
+}
 
 // Kill-switch (FEAT-075 FA01): cache curto do status ativo do tenant para barrar
 // tokens de barbearia suspensa na próxima requisição, sem 1 query por request.
@@ -63,23 +81,32 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     }
     const base = { id: payload.sub, role: payload.roles[0] as AuthUser['role'], name: payload.name };
 
-    // DEV (plataforma) não pertence a tenant — passa limpo, sem checagem territorial (RN13).
-    if (base.role === 'DEV') {
-      req.user = { ...base, tenantId: null };
-      next();
-      return;
-    }
-    if (payload.tnt) {
-      req.user = { ...base, tenantId: payload.tnt };
-      ensureTenantActive(payload.tnt, req, res, next);
-      return;
-    }
-    // Token antigo sem claim de tenant: resolve via banco (anti-quebra de sessões existentes).
-    prisma.user.findUnique({ where: { id: payload.sub }, select: { tenantId: true } })
-      .then(u => {
-        const tid = u?.tenantId ?? DEFAULT_TENANT_ID;
-        req.user = { ...base, tenantId: tid };
-        ensureTenantActive(tid, req, res, next);
+    // SEC (FEAT-088): rejeita tokens revogados (logout/troca-de-senha) antes de liberar acesso.
+    resolveTokenValidAfter(payload.sub)
+      .then(validAfterMs => {
+        if (validAfterMs !== null && (payload.iat ?? 0) * 1000 < validAfterMs) {
+          res.status(401).json({ timestamp: new Date().toISOString(), status: 401, code: 'SESSION_REVOKED', message: 'Sessão encerrada. Faça login novamente.', path: req.path });
+          return;
+        }
+
+        // DEV (plataforma) não pertence a tenant — passa limpo, sem checagem territorial (RN13).
+        if (base.role === 'DEV') {
+          req.user = { ...base, tenantId: null };
+          next();
+          return;
+        }
+        if (payload.tnt) {
+          req.user = { ...base, tenantId: payload.tnt };
+          ensureTenantActive(payload.tnt, req, res, next);
+          return;
+        }
+        // Token antigo sem claim de tenant: resolve via banco (anti-quebra de sessões existentes).
+        return prisma.user.findUnique({ where: { id: payload.sub }, select: { tenantId: true } })
+          .then(u => {
+            const tid = u?.tenantId ?? DEFAULT_TENANT_ID;
+            req.user = { ...base, tenantId: tid };
+            ensureTenantActive(tid, req, res, next);
+          });
       })
       .catch(next);
   } catch {

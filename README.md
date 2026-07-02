@@ -51,8 +51,8 @@ O produto cobre três audiências:
 | Audiência | Onde acessa | O que faz |
 | --- | --- | --- |
 | **Cliente** | Web + App | Conecta-se à barbearia, agenda, paga, acompanha cashback |
-| **Barbeiro / Admin** | Web | Gerencia agenda, catálogo, equipe, comissões, relatórios e análises |
-| **Desenvolvedor (plataforma)** | Web (backoffice) | Onboarding e bloqueio de barbearias assinantes |
+| **Barbeiro / Admin** | Web | Gerencia agenda, catálogo, equipe, finanças (fluxo de caixa), relatórios e análises |
+| **Desenvolvedor (plataforma)** | Web (backoffice) | Onboarding, bloqueio e gestão de barbearias/usuários assinantes |
 
 ---
 
@@ -70,7 +70,8 @@ O produto cobre três audiências:
 ### Barbeiro / Administrador
 - **Centro de Comando** (dashboard) com receita, ticket médio, LTV, ociosidade e radar de detratores.
 - **Módulo de Análises** com gráficos de faturamento (geral, por barbeiro, por dia da semana) e filtros 7/14 dias e mês atual.
-- Gestão de catálogo, equipe, expediente, férias, cupons e regras de comissão.
+- **Financeiro / Fluxo de caixa** (FEAT-087): cadastro de custos fixos (moldes recorrentes), geração mensal de contas a pagar, ciclo Pendente→Pago e **lucro líquido** no dashboard (receita − despesas pagas). Categorias globais + por barbearia.
+- Gestão de catálogo, equipe, expediente, férias e cupons.
 - Aplicação de **No-Show** com penalidade de cashback após tolerância configurável.
 - Campanhas de **Win-back** automáticas e manuais.
 - **2FA (TOTP)** opcional para proteger a conta.
@@ -79,13 +80,15 @@ O produto cobre três audiências:
 - **Backoffice mestre** em rota dedicada (`/platform`) para o dono do SaaS.
 - Onboarding transacional de barbearias (cria barbearia + usuário-mestre Admin atômico).
 - **Kill-switch**: inativa uma barbearia e derruba todos os seus tokens instantaneamente.
-- Listagem global paginada de tenants.
+- Listagem global paginada de tenants; gestão global de usuários; exclusão crítica de tenant via 2FA.
+- Painel de **Segurança (2FA)** no backoffice para ativar/gerenciar o TOTP do DEV.
 
 ### Plataforma técnica
 - **Multi-tenant** com isolamento por `tenant_id` em todas as tabelas.
 - **Barramento de eventos de domínio** (event-driven) pós-commit, *future-proof* para WebSockets.
 - **Notificações** Push e WhatsApp (WaSenderAPI) via outbox persistente com retry.
 - Revalidação passiva no front (React Query: window-focus + polling).
+- **Hardening de segurança** (FEAT-088): rate-limit por IP, headers `helmet` (CSP/HSTS/X-Frame-Options), revogação de JWT (`token_valid_after`), guardas de IDOR multi-tenant e RLS no Postgres.
 
 > O catálogo completo e versionado de funcionalidades, regras de negócio (RN) e casos de teste está em [`docs/FEATURES_BUGS_HOTFIXES.md`](docs/FEATURES_BUGS_HOTFIXES.md).
 
@@ -144,28 +147,37 @@ Princípios de design do backend:
 
 ```text
 Razorfy/
-├── backend/                 API Express + Prisma
+├── backend/                 API Express + Prisma (serviço-por-domínio, monolito)
 │   ├── prisma/
 │   │   ├── schema.prisma     Modelo de dados
-│   │   └── migrations/       Migrations SQL versionadas (0001 … 0014)
+│   │   └── migrations/       Migrations SQL versionadas (0001 … 0018)
 │   └── src/
-│       ├── auth/             Login, registro, OTP, 2FA, Google
+│       ├── auth/             Login, registro, OTP, 2FA, Google, logout/revogação
 │       ├── appointment/      Agendamentos e políticas
-│       ├── admin/            Dashboard, analytics, cupons, comissões
+│       ├── admin/            Dashboard, analytics, cupons
+│       ├── finance/          Custos fixos + contas a pagar + fluxo de caixa (FEAT-087)
 │       ├── platform/         Backoffice mestre (role DEV)
 │       ├── catalog/          Serviços, barbeiros, tenants
 │       ├── cashback/         Carteira e transações
 │       ├── notification/     Outbox + adapter WhatsApp (WaSenderAPI)
 │       ├── events/           Barramento de eventos de domínio
-│       ├── middleware/       authenticate, resolveTenant, requireRole
-│       └── common/           crypto, phone, errors
-├── frontend/                React SPA (cliente, barbeiro, admin, backoffice)
-│   └── src/App.tsx           Aplicação single-file
-├── mobile/                  App Expo / React Native
+│       ├── jobs/             Jobs in-process (expire-holds, outbox, win-back, payables)
+│       ├── middleware/       authenticate (+ revogação/tenant guard), resolveTenant, requireRole
+│       └── common/           crypto, phone, errors, rateLimit
+├── frontend/                React SPA modular (cliente, barbeiro, admin, backoffice)
+│   └── src/
+│       ├── App.tsx           Casca de inicialização (shell → <AppRoutes/>)
+│       ├── core/             types · api · hooks(useAuth) · domain · utils · ui · routes
+│       └── modules/          auth · onboarding · appointments · client · barber · dashboard · settings · platform
+├── mobile/                  App Expo / React Native (context · services · components · screens)
 ├── docs/
-│   └── FEATURES_BUGS_HOTFIXES.md   Catálogo canônico de features e RNs
+│   ├── FEATURES_BUGS_HOTFIXES.md   Catálogo canônico de features e RNs
+│   ├── ANALISE_ARQUITETURA.md      Análise de arquitetura (grafo de conhecimento)
+│   └── UI_PROMPT_SPEC.md           Especificação de identidade visual/UI
 └── docker-compose.yml      Ambiente de desenvolvimento completo
 ```
+
+> **Frontend modular:** o antigo `App.tsx` monolítico (~4.3k linhas) foi decomposto em `core/` (fundação compartilhada) + `modules/` (domínios). `App.tsx` hoje é só a casca que monta o `AppRoutes`. Detalhes em `docs/ANALISE_ARQUITETURA.md`.
 
 ---
 
@@ -254,7 +266,7 @@ npm run db:migrate      # prisma migrate deploy
 npm run db:generate     # prisma generate (Prisma Client)
 ```
 
-Histórico (resumo): inicial → CRM de barbeiro → OAuth Google → módulo de admin → settings → **multi-tenant** → código de conexão → backoffice DEV → 2FA → OTP por telefone.
+Histórico (resumo): inicial → CRM de barbeiro → OAuth Google → módulo de admin → settings → **multi-tenant** → código de conexão → backoffice DEV → 2FA → OTP por telefone → ícones de serviço → **RLS (segurança)** → **financeiro** → **revogação de sessão**.
 
 ---
 
@@ -285,11 +297,17 @@ Tenant padrão: **Razorfy** — código de conexão **`RAZORFY`**.
 
 ## Segurança
 
-- **Autenticação:** e-mail/telefone + senha, Google OAuth, OTP por telefone (cadastro).
-- **2FA (TOTP):** RFC 6238 via otplib; segredo cifrado (AES-256-GCM); login interceptado com `preAuthToken`; rate limit de 5 tentativas / 15 min.
+- **Autenticação:** e-mail/telefone + senha (bcrypt), Google OAuth, OTP por telefone (cadastro).
+- **2FA (TOTP):** RFC 6238 via otplib; segredo cifrado (AES-256-GCM); login interceptado com `preAuthToken`. Setup por QR no app (cliente/barbeiro/admin) e no painel **Segurança** do backoffice DEV.
+- **Rate limiting (FEAT-088):** `express-rate-limit` por IP — 10/15 min nas rotas de credencial/OTP + limite global 120/min (`trust proxy` para o IP real atrás do Render).
+- **Security headers (FEAT-088):** `helmet` — CSP `default-src 'none'`, `X-Frame-Options: DENY` (anti-clickjacking), HSTS, `nosniff`, `no-referrer`.
+- **Revogação de sessão (FEAT-088):** JWT com `iat`; `users.token_valid_after` invalida tokens anteriores no logout (`POST /auth/logout`) e na troca de senha (código `SESSION_REVOKED`).
+- **Anti-enumeração (FEAT-088):** login e cadastro retornam erros genéricos (não confirmam existência de e-mail/telefone).
+- **Anti-IDOR:** tenant sempre derivado do token; recursos de negócio (agendamentos, financeiro) cruzam o `tenant_id` do ator (retorno `404` sem vazar existência).
+- **RLS (FEAT-086):** Row-Level Security habilitado em todas as tabelas públicas (bloqueia a API REST do Supabase; Prisma opera como dono).
 - **Isolamento de plataforma:** rotas `/platform/*` exigem role `DEV` (verificada antes de qualquer leitura de tenant).
 - **Anti-overbooking:** locks pessimistas + `EXCLUDE USING gist`.
-- **Anti-IDOR:** tenant sempre derivado do token, nunca do corpo da requisição.
+- **CORS:** allowlist estrita por origem (sem `*`).
 - **LGPD:** anonimização de conta de cliente sob demanda.
 
 ---
@@ -327,7 +345,10 @@ Base: `/api/v1`. Saúde: `GET /actuator/health`.
 | `POST` | `/auth/register` | Cadastro (`identifier` = e-mail ou telefone) |
 | `POST` | `/auth/login` | Login; pode retornar `202 REQUIRE_2FA` |
 | `POST` | `/auth/login/verify-2fa` | Conclui login com código TOTP |
+| `POST` | `/auth/logout` | Revoga sessões (invalida JWTs anteriores) |
 | `GET` | `/auth/google/url` · `POST /auth/google` | Login social Google |
+
+> Rotas de credencial/OTP são limitadas por IP (`10/15 min`). Erros de login/cadastro são genéricos (anti-enumeração).
 
 ### Conexão de tenant (público)
 | Método | Endpoint | Uso |
@@ -353,11 +374,20 @@ Base: `/api/v1`. Saúde: `GET /actuator/health`.
 | `GET` | `/admin/analytics?range=` | Gráficos financeiros (7/14 dias, mês) |
 | `GET` | `/admin/barbershop` | Código de conexão da barbearia |
 | `POST` | `/admin/appointments/:id/no-show` | No-show + penalidade |
-| `GET/POST/PUT/DELETE` | `/admin/coupons` · `/admin/commissions` | Cupons e comissões |
+| `GET/POST/PUT/DELETE` | `/admin/coupons` | Cupons |
 | `GET/POST/DELETE` | `/admin/vacation-blocks` | Férias |
 | `GET/PATCH` | `/admin/alerts` | Radar de detratores |
 | `POST` | `/admin/campaigns/win-back/run` | Win-back manual |
 | `GET/PUT` | `/admin/global-settings` | Tolerância de no-show e taxa de cashback |
+
+### Financeiro (`/finances/*`, role `ADMIN`) — FEAT-087
+| Método | Endpoint | Uso |
+| --- | --- | --- |
+| `GET/POST` | `/finances/categories` | Categorias de despesa (globais + do tenant) |
+| `GET/POST` | `/finances/fixed-costs` | Custos fixos (moldes recorrentes) |
+| `PUT/DELETE` | `/finances/fixed-costs/:id` | Editar (reajuste) / desativar (soft-delete) |
+| `GET` | `/finances/payables?month=YYYY-MM` | Contas a pagar do mês |
+| `PATCH` | `/finances/payables/:id/pay` | Liquidar conta (Pendente→Pago) |
 
 ### Plataforma (`/platform/*`, role `DEV`)
 | Método | Endpoint | Uso |
@@ -433,6 +463,9 @@ cd mobile && npm install && npm run typecheck && npm run doctor
 
 [`docs/FEATURES_BUGS_HOTFIXES.md`](docs/FEATURES_BUGS_HOTFIXES.md) é o **catálogo canônico** do projeto: cada feature (`FEAT-NNN`), regra de negócio (`RN-NNN`), bug e hotfix possui ID e campos estáveis para automação de releases. Consulte-o antes de implementar ou alterar comportamento.
 
+- [`docs/ANALISE_ARQUITETURA.md`](docs/ANALISE_ARQUITETURA.md) — análise de arquitetura baseada em grafo de conhecimento (comunidades, god nodes, decomposição modular do frontend, auditoria de coesão).
+- [`docs/UI_PROMPT_SPEC.md`](docs/UI_PROMPT_SPEC.md) — especificação de identidade visual e estados de tela.
+
 ---
 
 ## Convenções de contribuição
@@ -448,7 +481,8 @@ cd mobile && npm install && npm run typecheck && npm run doctor
 - A grade de início avança em 15 min, mas aceita qualquer duração acumulada.
 - `PENDING_PAYMENT` bloqueia o intervalo por 10 min; o cashback aplicado fica reservado até a confirmação.
 - `NO_SHOW` é terminal (não retorna a `CONFIRMED`).
-- Comissão incide sobre o valor líquido recebido (após cupom/cashback).
+- Custos fixos geram contas a pagar mensais; reajuste do molde só afeta instâncias `PENDING` futuras (histórico imutável).
+- Lucro líquido do dashboard deduz apenas despesas `PAID` na janela do filtro.
 - Férias não são retroativas e conflitam com agendamentos `CONFIRMED`.
 
 ---

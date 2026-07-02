@@ -9,6 +9,7 @@ export const authLimiter = rateLimit({
   max: 10,               // 10 tentativas por IP por janela
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false }, // trust proxy=true é intencional (Render multi-hop)
   message: { code: 'TOO_MANY_ATTEMPTS', message: 'Muitas tentativas. Tente novamente em alguns minutos.' },
 });
 
@@ -18,5 +19,6 @@ export const globalLimiter = rateLimit({
   max: 120,         // 120 req por IP por minuto
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false }, // idem authLimiter
   message: { code: 'TOO_MANY_REQUESTS', message: 'Excesso de requisições. Aguarde um momento.' },
 });

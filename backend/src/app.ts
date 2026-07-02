@@ -37,8 +37,10 @@ import { globalLimiter } from './common/rateLimit';
 export function createApp() {
   const app = express();
 
-  // SEC: IP real por trás do proxy (Render/Vercel) — necessário para rate-limit por IP.
-  app.set('trust proxy', 1);
+  // SEC: IP real por trás da cadeia de proxies do Render — necessário para rate-limit por IP.
+  // `1` não bastava (Render tem múltiplos hops → req.ip rotaciona); `true` confia na cadeia
+  // e resolve o IP do cliente (XFF). Trade-off aceitável para o propósito do limiter.
+  app.set('trust proxy', true);
 
   // SEC: headers de segurança (clickjacking, MIME-sniffing, HSTS). API JSON pura → CSP restritiva.
   app.use(helmet({

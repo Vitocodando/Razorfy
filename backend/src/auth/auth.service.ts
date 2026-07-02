@@ -311,5 +311,7 @@ function tokenFor(user: { id: string; name: string; role: string; tenantId: stri
     iat: now,
     exp: now + expirationHours * 3600,
   };
-  return jwt.sign(payload, config.JWT_SECRET, { algorithm: 'HS256', noTimestamp: true });
+  // SEC (FEAT-088): sem noTimestamp — ele descarta o iat, e a revogação por token_valid_after
+  // depende do iat. Sem iat, todo token novo após um logout seria falsamente revogado.
+  return jwt.sign(payload, config.JWT_SECRET, { algorithm: 'HS256' });
 }

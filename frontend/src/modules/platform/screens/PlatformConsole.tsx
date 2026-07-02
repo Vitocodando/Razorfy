@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
+import { QRCodeCanvas } from 'qrcode.react'
 import { request } from '../../../core/api/client'
 import type { Session } from '../../../core/types'
 import { Icon, ErrorBanner } from '../../../core/ui/primitives'
@@ -78,7 +79,7 @@ export function PlatformConsole({ session, onSignOut }: { session: Session; onSi
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [showForm, setShowForm] = useState(false)
-  const [view, setView] = useState<'tenants' | 'users'>('tenants') // FEAT-084
+  const [view, setView] = useState<'tenants' | 'users' | 'security'>('tenants') // FEAT-084 / 2FA DEV
   const [deleteTarget, setDeleteTarget] = useState<PlatformTenant | null>(null) // FEAT-085
   const size = 20
 
@@ -122,12 +123,13 @@ export function PlatformConsole({ session, onSignOut }: { session: Session; onSi
         {success && <div className="rounded-lg bg-primary/15 border border-primary/30 text-primary px-4 py-2 text-[13px]">{success}</div>}
 
         <div className="flex items-center gap-2">
-          {([['tenants', 'Barbearias'], ['users', 'Usuários']] as const).map(([k, label]) => (
+          {([['tenants', 'Barbearias'], ['users', 'Usuários'], ['security', 'Segurança']] as const).map(([k, label]) => (
             <button key={k} onClick={() => setView(k)} className={`h-9 px-4 rounded-lg text-[13px] font-semibold border transition-colors ${view === k ? 'bg-primary text-on-primary border-primary' : 'bg-white/5 text-white/60 border-white/10 hover:text-white'}`}>{label}</button>
           ))}
         </div>
 
         {view === 'users' && <PlatformUsersPanel token={token} tenants={data?.content ?? []} />}
+        {view === 'security' && <PlatformSecurityPanel token={token} />}
 
         {view === 'tenants' && (<>
         <div className="flex items-center justify-between">
@@ -452,6 +454,109 @@ function PlatformUserEditModal({ token, user, onClose, onSaved }: { token: strin
           <button onClick={save} disabled={busy} className="flex-1 h-10 rounded-lg bg-primary text-on-primary text-[13px] font-bold disabled:opacity-50">Salvar</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// 2FA do DEV (fecha o gap de UX: o backoffice não tinha setup de 2FA).
+// Reusa os endpoints /users/me/2fa/{setup,enable,disable} — estilizado dark para o backoffice.
+function PlatformSecurityPanel({ token }: { token: string }) {
+  const [enabled, setEnabled] = useState<boolean | null>(null)
+  const [setupData, setSetupData] = useState<{ otpAuthUri: string; manualSecretKey: string } | null>(null)
+  const [code, setCode] = useState('')
+  const [disablePwd, setDisablePwd] = useState('')
+  const [showDisable, setShowDisable] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => {
+    request<{ is2faEnabled: boolean }>('/users/me', {}, token)
+      .then((me) => setEnabled(me.is2faEnabled))
+      .catch((c) => setError(c instanceof Error ? c.message : 'Falha ao carregar status.'))
+  }, [token])
+
+  async function startSetup() {
+    setBusy(true); setError(''); setSuccess('')
+    try {
+      setSetupData(await request<{ otpAuthUri: string; manualSecretKey: string }>('/users/me/2fa/setup', { method: 'POST' }, token))
+    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível iniciar o 2FA.') }
+    finally { setBusy(false) }
+  }
+
+  async function confirmEnable(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError(''); setSuccess('')
+    try {
+      await request('/users/me/2fa/enable', { method: 'POST', body: JSON.stringify({ code }) }, token)
+      setEnabled(true); setSetupData(null); setCode(''); setSuccess('2FA ativado.')
+    } catch (c) { setError(c instanceof Error ? c.message : 'Código inválido.') }
+    finally { setBusy(false) }
+  }
+
+  async function confirmDisable(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError(''); setSuccess('')
+    try {
+      await request('/users/me/2fa', { method: 'DELETE', body: JSON.stringify({ currentPassword: disablePwd, code }) }, token)
+      setEnabled(false); setShowDisable(false); setDisablePwd(''); setCode(''); setSuccess('2FA desativado.')
+    } catch (c) { setError(c instanceof Error ? c.message : 'Não foi possível desativar.') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="max-w-md flex flex-col gap-4">
+      <div>
+        <h1 className="text-[18px] font-bold">Segurança da conta (2FA)</h1>
+        <p className="text-[12px] text-white/50">Autenticação em duas etapas (TOTP) — obrigatória para exclusão de barbearias.</p>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+      {success && <div className="rounded-lg bg-primary/15 border border-primary/30 text-primary px-4 py-2 text-[13px]">{success}</div>}
+
+      {enabled === null ? (
+        <div className="h-24 bg-white/5 rounded-xl animate-pulse" />
+      ) : enabled ? (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col gap-3">
+          <div className="inline-flex items-center gap-2 text-green-400 text-[14px] font-semibold">
+            <Icon name="verified_user" className="text-[20px]" /> 2FA ativo
+          </div>
+          {!showDisable ? (
+            <button onClick={() => setShowDisable(true)} className="self-start text-[12px] text-white/50 hover:text-white underline">Desativar 2FA</button>
+          ) : (
+            <form onSubmit={confirmDisable} className="flex flex-col gap-2">
+              <input type="password" value={disablePwd} onChange={(e) => setDisablePwd(e.target.value)} placeholder="Senha atual" required className="h-11 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] placeholder:text-white/30" />
+              <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="Código do app (6 dígitos)" maxLength={6} required className="h-11 px-3 rounded-lg bg-white/5 border border-white/15 text-white text-[13px] placeholder:text-white/30" />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => { setShowDisable(false); setError('') }} className="h-10 px-4 rounded-lg border border-white/15 text-white/60 text-[12px] font-semibold">Cancelar</button>
+                <button disabled={busy || code.length !== 6 || !disablePwd} className="h-10 px-4 rounded-lg bg-error text-on-error text-[12px] font-semibold disabled:opacity-40">Desativar</button>
+              </div>
+            </form>
+          )}
+        </div>
+      ) : !setupData ? (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col gap-3">
+          <div className="inline-flex items-center gap-2 text-white/60 text-[14px] font-semibold">
+            <Icon name="gpp_maybe" className="text-[20px] text-yellow-400" /> 2FA inativo
+          </div>
+          <button onClick={startSetup} disabled={busy} className="self-start h-10 px-4 rounded-lg bg-primary text-on-primary text-[13px] font-bold disabled:opacity-40 inline-flex items-center gap-2">
+            {busy ? <Icon name="progress_activity" className="animate-spin text-[18px]" /> : <Icon name="qr_code_2" className="text-[18px]" />}
+            Ativar 2FA
+          </button>
+        </div>
+      ) : (
+        <div className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col items-center gap-3">
+          <p className="text-[13px] text-white/70 self-start">1. Escaneie o QR no app autenticador (Google Authenticator, Authy...):</p>
+          <div className="bg-white p-3 rounded-xl"><QRCodeCanvas value={setupData.otpAuthUri} size={172} level="M" /></div>
+          <p className="text-[12px] text-white/50 self-start">Ou insira a chave manualmente:</p>
+          <code className="text-[12px] font-mono bg-white/10 px-3 py-1.5 rounded-lg break-all w-full text-center text-white">{setupData.manualSecretKey}</code>
+          <form onSubmit={confirmEnable} className="w-full flex flex-col gap-2 mt-1">
+            <p className="text-[13px] text-white/70">2. Digite o código de 6 dígitos gerado pelo app:</p>
+            <input autoFocus inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" maxLength={6} className="h-12 px-4 rounded-lg bg-white/5 border border-white/15 text-white text-[20px] tracking-[0.4em] font-bold text-center placeholder:text-white/20" />
+            <button disabled={busy || code.length !== 6} className="h-11 rounded-lg bg-primary text-on-primary text-[13px] font-bold disabled:opacity-40">Ativar 2FA</button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
